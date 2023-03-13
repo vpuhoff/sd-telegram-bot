@@ -1,3 +1,5 @@
 .env
 *.png
 main copy.py
+config/*
+*.pyc

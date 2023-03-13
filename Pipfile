@@ -8,6 +8,10 @@ python-telegram-bot = "*"
 webuiapi = "*"
 pillow = "*"
 pyyaml = "*"
+sentry-sdk = "*"
+opentracing = "*"
+deep-translator = "*"
+diskcache = "*"
 
 [dev-packages]
 
