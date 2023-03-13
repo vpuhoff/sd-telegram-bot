@@ -10,10 +10,10 @@ import sentry_sdk
 import telegram
 import webuiapi
 from deep_translator import GoogleTranslator
-from telegram import (ForceReply, InlineKeyboardButton, InlineKeyboardMarkup,
+from telegram import (ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultCachedPhoto, InlineQueryResultPhoto,
                       KeyboardButton, ReplyKeyboardMarkup, Update)
 from telegram import __version__ as TG_VER
-from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+from telegram.ext import (Application, InlineQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
 import default
@@ -103,34 +103,47 @@ def init_params(update, context):
 
 async def send_admin(update, user, promt, img_io):
     bot = update.get_bot()
-    await bot.send_photo(33497099, img_io, f"image from {user.name} [{promt}]")
+    return await bot.send_photo(33497099, img_io, f"image from {user.name} [{promt}]")
 
 STATE = None
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user:
-        user_config = init_params(update, context) # Инициализация пользовательских настроек
-        generation_params = user_config['generation_params']
-        if update.message and update.message.text:
-            translated = GoogleTranslator(source='auto', target='en') \
-                .translate(update.message.text)
-            generation_params['prompt'] = translated
-            generation_params['seed'] = randint(1, 10^5)
-            print(user.name, generation_params)
-            try:
-                await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
-                img_io = generate_image(generation_params)
-                req_uid = str(uuid4())
-                await update.message.reply_photo(img_io, translated, 
-                    filename=f"{req_uid}.png",
-                    reply_to_message_id=update.message.id)
-                img_io.seek(0)
-                await send_admin(update, user, translated, img_io)
-            except Exception as e:
-                await update.message.reply_text(f"Произошла ошибка: {e}")
-                raise e
+        init_params(update, context) # Инициализация пользовательских настроек
+        #generation_params = None
+        # if update.inline_query:
+        #     translated = GoogleTranslator(source='auto', target='en') \
+        #         .translate(update.inline_query.query)
+        #     generation_params = default.generation_params_low
+        # elif update.message and update.message.text:
+        generation_params = default.generation_params_hq
+        translated = GoogleTranslator(source='auto', target='en') \
+            .translate(update.message.text)
 
+        generation_params['prompt'] = translated
+        if len(translated) < 3:
+            return
+        generation_params['seed'] = randint(1, 10^5)
+        print(user.name, generation_params)
+        img_io = None
+        try:
+            await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
+            img_io = generate_image(generation_params)
+            req_uid = str(uuid4())
+            await send_admin(update, user, translated, img_io)
+            img_io.seek(0)
+            await update.message.reply_photo(img_io,
+                translated, 
+                filename=f"{req_uid}.png",
+                reply_to_message_id=update.message.id)
+        except Exception as e:
+            await update.message.reply_text(f"Произошла ошибка: {e}")
+            raise e
+        #file_id = result.photo[-1].file_id
+        # elif update.inline_query:
+        #     result = InlineQueryResultCachedPhoto(req_uid, file_id)
+        #     await update.inline_query.answer([result])
 
 def generate_image(job_config):
     result1 = api.txt2img(**job_config)
@@ -145,8 +158,9 @@ async def handle_callback(update, context):
     data = query.data
     context.user_data["state"] = data
     bot = context.bot
-    await bot.send_message(chat_id=context._chat_id, text="Введите новое значение параметра:")
-    # ...
+    await bot.send_message(chat_id=context._chat_id,
+    text="Введите новое значение параметра:")
+
 
 def main() -> None:
     """Start the bot."""
@@ -158,6 +172,7 @@ def main() -> None:
 
     # on non command i.e message - echo the message on Telegram
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    #application.add_handler(InlineQueryHandler(echo))
     # application.add_handler(MessageHandler(filters.COMMAND, echo))
     # application.add_handler(CallbackQueryHandler(handle_callback))
     # Run the bot until the user presses Ctrl-C
