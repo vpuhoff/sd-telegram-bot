@@ -1,15 +1,3 @@
-# 
-
-Чат бот для telegram для интеграции с [https://github.com/AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
-
-Переменные окружения для настройки бота 
-
-TOKEN= telegram token
-DSN= dsn glitchtip или sentry
-API_HOST= хост где запущен https://github.com/AUTOMATIC1111/stable-diffusion-webui
-API_PORT=порт где запущен https://github.com/AUTOMATIC1111/stable-diffusion-webui
-ADMIN_CHAT_ID= идентификатор чата админа, чтобы все запросы дублировались для отладки
-
 # Чат-бот для Telegram для интеграции с Stable Diffusion WebUI
 
 Этот чат-бот позволяет интегрировать Telegram с [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui), чтобы вы могли генерировать картинки в Telegram.
