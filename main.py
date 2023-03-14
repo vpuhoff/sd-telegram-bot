@@ -78,11 +78,10 @@ main_commands = [["/start"]]
 reply_main_markup = ReplyKeyboardMarkup(main_commands, is_persistent=True)
 
 # create API client with custom host, port
-api = webuiapi.WebUIApi(host='127.0.0.1', port=7860)
+api = webuiapi.WebUIApi(host=getenv("API_HOST"), port=getenv("API_PORT"))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /start is issued."""
     init_params(update, context)
 
 
@@ -97,15 +96,13 @@ def init_params(update, context):
         return configs[user]
     else:
         return configs[user]
-    # await update.message.reply_html(
-    #     "Для запуска генерации выбери команду введи текст (он будет добавлен к тому что указан в параметрах)",
-    #     reply_markup=reply_main_markup,
-    # )
 
 
 async def send_admin(update, user, promt, img_io):
-    bot = update.get_bot()
-    return await bot.send_photo(33497099, img_io, f"image from {user.name} [{promt}]")
+    admin_chat_id = getenv("ADMIN_CHAT_ID", None)
+    if admin_chat_id:
+        bot = update.get_bot()
+        return await bot.send_photo(admin_chat_id, img_io, f"image from {user.name} [{promt}]")
 
 STATE = None
 
