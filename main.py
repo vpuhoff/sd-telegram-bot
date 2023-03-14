@@ -1,3 +1,4 @@
+from copy import copy
 import json
 import logging
 from io import BytesIO
@@ -120,14 +121,17 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # elif update.message and update.message.text:
         if not update.message or not update.message.text:
             return
-        generation_params = default.generation_params_hq
+        generation_params = copy(default.generation_params_hq)
         translated = GoogleTranslator(source='auto', target='en') \
             .translate(update.message.text)
         censored_text = profanity.censor(translated)
 
         generation_params['prompt'] = censored_text.replace("*", '')
+        if ' not ' in censored_text.lower():
+            generation_params["negative_prompt"] = ','.join(censored_text.lower().split(' not ')[1:])
         if len(translated) < 3:
             return
+
         generation_params['seed'] = randint(1, 10^5)
         print(user.name, generation_params)
         img_io = None
