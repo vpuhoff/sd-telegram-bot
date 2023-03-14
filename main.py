@@ -5,6 +5,7 @@ from os import getenv
 from random import randint
 from uuid import uuid4
 
+from better_profanity import profanity
 import diskcache as dc
 import sentry_sdk
 import telegram
@@ -117,11 +118,14 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         #         .translate(update.inline_query.query)
         #     generation_params = default.generation_params_low
         # elif update.message and update.message.text:
+        if not update.message or not update.message.text:
+            return
         generation_params = default.generation_params_hq
         translated = GoogleTranslator(source='auto', target='en') \
             .translate(update.message.text)
+        censored_text = profanity.censor(translated)
 
-        generation_params['prompt'] = translated
+        generation_params['prompt'] = censored_text.replace("*", '')
         if len(translated) < 3:
             return
         generation_params['seed'] = randint(1, 10^5)
@@ -131,10 +135,10 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
             img_io = generate_image(generation_params)
             req_uid = str(uuid4())
-            await send_admin(update, user, translated, img_io)
+            await send_admin(update, user, censored_text, img_io)
             img_io.seek(0)
             await update.message.reply_photo(img_io,
-                translated, 
+                censored_text, 
                 filename=f"{req_uid}.png",
                 reply_to_message_id=update.message.id)
         except Exception as e:

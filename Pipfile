@@ -12,6 +12,7 @@ sentry-sdk = "*"
 opentracing = "*"
 deep-translator = "*"
 diskcache = "*"
+better-profanity = "*"
 
 [dev-packages]
 

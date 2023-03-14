@@ -2,7 +2,7 @@ import webuiapi
 
 generation_params_hq = {
             "prompt": "style of Ilya Kuvshinov",
-            "negative_prompt": "(nude), ugly",
+            "negative_prompt": "ugly",
             "seed": -1,
             "width": 640,
             "height": 480,
@@ -21,7 +21,7 @@ generation_params_hq = {
 
 generation_params_low = {
             "prompt": "style of Ilya Kuvshinov",
-            "negative_prompt": "(nude), ugly",
+            "negative_prompt": "ugly",
             "seed": -1,
             "width": 128,
             "height": 128,
