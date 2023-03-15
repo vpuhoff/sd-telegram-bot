@@ -13,6 +13,8 @@ opentracing = "*"
 deep-translator = "*"
 diskcache = "*"
 better-profanity = "*"
+tensorflow = "*"
+nsfw-detector = "*"
 
 [dev-packages]
 

@@ -3,3 +3,4 @@
 main copy.py
 config/*
 *.pyc
+nsfw_mobilenet2/*

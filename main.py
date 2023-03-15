@@ -1,24 +1,30 @@
-from copy import copy
-import json
 import logging
+import urllib.request
+from copy import copy
 from io import BytesIO
 from os import getenv
+from os.path import exists
 from random import randint
 from uuid import uuid4
 
-from better_profanity import profanity
 import diskcache as dc
 import sentry_sdk
 import telegram
 import webuiapi
+from better_profanity import profanity
 from deep_translator import GoogleTranslator
-from telegram import (ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultCachedPhoto, InlineQueryResultPhoto,
+from nsfw_detector import predict
+from telegram import (ForceReply, InlineKeyboardButton, InlineKeyboardMarkup,
+                      InlineQueryResultCachedPhoto, InlineQueryResultPhoto,
                       KeyboardButton, ReplyKeyboardMarkup, Update)
 from telegram import __version__ as TG_VER
-from telegram.ext import (Application, InlineQueryHandler, CommandHandler,
-                          ContextTypes, MessageHandler, filters)
+from telegram.ext import (Application, CommandHandler, ContextTypes,
+                          InlineQueryHandler, MessageHandler, filters)
 
 import default
+
+nudenet_classifier = predict.load_model('./nsfw_mobilenet2/saved_model.h5')
+
 
 try:
     from telegram import __version_info__
@@ -110,53 +116,57 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user:
         init_params(update, context) # Инициализация пользовательских настроек
-        #generation_params = None
-        # if update.inline_query:
-        #     translated = GoogleTranslator(source='auto', target='en') \
-        #         .translate(update.inline_query.query)
-        #     generation_params = default.generation_params_low
-        # elif update.message and update.message.text:
         if not update.message or not update.message.text:
             return
         generation_params = copy(default.generation_params_hq)
         translated = GoogleTranslator(source='auto', target='en') \
             .translate(update.message.text)
         censored_text = profanity.censor(translated)
-
         generation_params['prompt'] = censored_text.replace("*", '')
         if ' not ' in censored_text.lower():
             generation_params["negative_prompt"] = ','.join(censored_text.lower().split(' not ')[1:])
         if len(translated) < 3:
             return
-
         generation_params['seed'] = randint(1, 10^5)
         print(user.name, generation_params)
         img_io = None
         try:
-            await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
-            img_io = generate_image(generation_params)
+            await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+            img_io, filename = generate_image(generation_params)
+            await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+            censor_result = predict.classify(nudenet_classifier, filename)
             req_uid = str(uuid4())
+            block_request = False
+            block_reason = ""
+            if censor_result[filename]['porn'] > 0.5:
+                block_reason = f"porn ~{censor_result[filename]['porn']}"
+                censored_text = f"[BLOCKED {block_reason}] {censored_text}"
+                block_request = True
             await send_admin(update, user, censored_text, img_io)
-            img_io.seek(0)
-            await update.message.reply_photo(img_io,
-                censored_text, 
-                filename=f"{req_uid}.png",
-                reply_to_message_id=update.message.id)
+            if not block_request:
+                img_io.seek(0)
+                await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
+                await update.message.reply_photo(img_io,
+                    censored_text, 
+                    filename=f"{req_uid}.png",
+                    reply_to_message_id=update.message.id)
+            else:
+                await update.message.reply_text(censored_text,
+                    reply_to_message_id=update.message.id)
         except Exception as e:
             await update.message.reply_text(f"Произошла ошибка: {e}")
             raise e
-        #file_id = result.photo[-1].file_id
-        # elif update.inline_query:
-        #     result = InlineQueryResultCachedPhoto(req_uid, file_id)
-        #     await update.inline_query.answer([result])
+
 
 def generate_image(job_config):
     result1 = api.txt2img(**job_config)
     img_io = BytesIO()
     result1.image.save(img_io, 'PNG')
     img_io.seek(0)
-    return img_io
-        # image is shorthand for images[0]
+    filename = f"{job_config['seed']}.png"
+    with open(filename, 'wb') as f:
+        result1.image.save(f, 'PNG')
+    return img_io, filename
 
 async def handle_callback(update, context):
     query = update.callback_query
