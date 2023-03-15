@@ -7,16 +7,16 @@ generation_params_hq = {
             "width": 640,
             "height": 480,
             "styles": [],
-            "cfg_scale": 5,
+            "cfg_scale": 7,
             "sampler_index": 'Euler a',
-            "steps": 50,
+            "steps": 75,
             "enable_hr": True,
             "hr_scale": 1.5,
             "hr_upscaler": webuiapi.HiResUpscaler.ESRGAN_4x,
-            "hr_second_pass_steps": 0,
-            "hr_resize_x": 1000,
-            "hr_resize_y": 800,
-            "denoising_strength": 0.6
+            "hr_second_pass_steps": 20,
+            "hr_resize_x": 1280,
+            "hr_resize_y": 720,
+            "denoising_strength": 0.3
         }
 
 generation_params_low = {

@@ -1,9 +1,7 @@
 import logging
-import urllib.request
 from copy import copy
 from io import BytesIO
 from os import getenv
-from os.path import exists
 from random import randint
 from uuid import uuid4
 
@@ -14,12 +12,11 @@ import webuiapi
 from better_profanity import profanity
 from deep_translator import GoogleTranslator
 from nsfw_detector import predict
-from telegram import (ForceReply, InlineKeyboardButton, InlineKeyboardMarkup,
-                      InlineQueryResultCachedPhoto, InlineQueryResultPhoto,
-                      KeyboardButton, ReplyKeyboardMarkup, Update)
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
+                      ReplyKeyboardMarkup, Update)
 from telegram import __version__ as TG_VER
 from telegram.ext import (Application, CommandHandler, ContextTypes,
-                          InlineQueryHandler, MessageHandler, filters)
+                          MessageHandler, filters)
 
 import default
 
