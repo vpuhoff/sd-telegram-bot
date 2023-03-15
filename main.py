@@ -131,16 +131,16 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await user.send_chat_action(telegram.constants.ChatAction.TYPING)
             img_io, filename = generate_image(generation_params)
             await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-            censor_result = predict.classify(nudenet_classifier, filename)
+            censor_result = predict.classify(nudenet_classifier, filename)[filename]
             req_uid = str(uuid4())
-            block_request = False
-            block_reason = ""
-            if censor_result[filename]['porn'] > 0.5:
-                block_reason = f"porn ~{censor_result[filename]['porn']}"
-                censored_text = f"[BLOCKED {block_reason}] {censored_text}"
-                block_request = True
+            censored_text, block_porn = check_filter(censored_text, 
+                                                     censor_result, 
+                                                     'porn', 0.3)
+            censored_text, block_hentai = check_filter(censored_text, 
+                                                       censor_result, 
+                                                       'hentai', 0.3)
             await send_admin(update, user, censored_text, img_io)
-            if not block_request:
+            if not block_porn and not block_hentai:
                 img_io.seek(0)
                 await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
                 await update.message.reply_photo(img_io,
@@ -154,6 +154,13 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(f"Произошла ошибка: {e}")
             raise e
 
+def check_filter(censored_text, censor_result, filter_name, filter_edge):
+    if censor_result[filter_name] > filter_edge:
+        block_reason = f"{filter_name}={round(censor_result['porn']*100)}%"
+        censored_text = f"[BLOCKED {block_reason}] {censored_text}"
+        return censored_text, True
+    else:
+        return censored_text, False
 
 def generate_image(job_config):
     result1 = api.txt2img(**job_config)
