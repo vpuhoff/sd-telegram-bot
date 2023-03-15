@@ -124,7 +124,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             generation_params["negative_prompt"] = ','.join(censored_text.lower().split(' not ')[1:])
         if len(translated) < 3:
             return
-        generation_params['seed'] = randint(1, 10^5)
+        generation_params['seed'] = randint(1, 1000000)
         print(user.name, generation_params)
         img_io = None
         try:

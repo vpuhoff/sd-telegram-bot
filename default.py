@@ -10,7 +10,7 @@ generation_params_hq = {
             "cfg_scale": 7,
             "sampler_index": 'Euler a',
             "steps": 75,
-            "enable_hr": True,
+            "enable_hr": False,
             "hr_scale": 1.5,
             "hr_upscaler": webuiapi.HiResUpscaler.ESRGAN_4x,
             "hr_second_pass_steps": 20,
