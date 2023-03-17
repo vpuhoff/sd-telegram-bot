@@ -1,7 +1,7 @@
 import logging
 from copy import copy
 from io import BytesIO
-from os import getenv
+from os import getenv, remove
 from random import randint
 from uuid import uuid4
 
@@ -41,6 +41,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 configs = dc.Cache('config')
+black_list = dc.Cache('black_list')
 
 sentry_dsn = getenv("DSN", None)
 sentry_sdk.init(sentry_dsn)
@@ -115,6 +116,12 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         init_params(update, context) # Инициализация пользовательских настроек
         if not update.message or not update.message.text:
             return
+        current_strike_count = black_list.get(user.name, 0)
+        if current_strike_count >= 10:
+            print(user.name, "[blocked] user request rejected because user has banned")
+            await update.message.reply_text(f"Strike {current_strike_count}/10 [Access to this bot is blocked for you for creating NSFW content.]",
+                reply_to_message_id=update.message.id)
+            return
         generation_params = copy(default.generation_params_hq)
         translated = GoogleTranslator(source='auto', target='en') \
             .translate(update.message.text)
@@ -148,8 +155,16 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     filename=f"{req_uid}.png",
                     reply_to_message_id=update.message.id)
             else:
+                current_strike_count = black_list.get(user.name, 0)
+                current_strike_count += 1
+                black_list.set(user.name, current_strike_count)
                 await update.message.reply_text(censored_text,
                     reply_to_message_id=update.message.id)
+                warn_message = f"Strike {current_strike_count}/10 - NSFW content is not welcome in this bot, it was created for a small group of artists and their art experiments. It is not prohibited to use it to create creative content by any user, but when you reach 10 strikes, access to this bot will be blocked for you."
+                await update.message.reply_text(warn_message,
+                    reply_to_message_id=update.message.id)
+                print(user.name, warn_message)
+            remove(filename)
         except Exception as e:
             await update.message.reply_text(f"Произошла ошибка: {e}")
             raise e
