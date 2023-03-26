@@ -1,41 +1,33 @@
 import webuiapi
 
 generation_params_hq = {
-            "prompt": "style of Ilya Kuvshinov",
-            "negative_prompt": "ugly",
-            "seed": -1,
-            "width": 640,
-            "height": 480,
-            "styles": [],
-            "cfg_scale": 7,
-            "sampler_index": 'Euler a',
-            "steps": 75,
-            "enable_hr": False,
+            "steps": 65,
+            "enable_hr": True,
             "hr_scale": 1.5,
-            "hr_upscaler": webuiapi.HiResUpscaler.ESRGAN_4x,
-            "hr_second_pass_steps": 20,
-            "hr_resize_x": 1280,
-            "hr_resize_y": 720,
-            "denoising_strength": 0.3
+            "hr_upscaler": webuiapi.HiResUpscaler.Latent,
+            "hr_second_pass_steps": 0,
+            "hr_resize_x": 754,
+            "hr_resize_y": 1009,
+            "denoising_strength": 0.7
         }
 
 generation_params_low = {
             "prompt": "style of Ilya Kuvshinov",
             "negative_prompt": "ugly",
             "seed": -1,
-            "width": 128,
-            "height": 128,
+            "width": 520,
+            "height": 696,
             "styles": [],
-            "cfg_scale": 5,
-            "sampler_index": 'Euler a',
-            "steps": 25,
-            "enable_hr": True,
+            "cfg_scale": 6,
+            "sampler_index": 'UniPC',
+            "steps": 35,
+            "enable_hr": False,
             "hr_scale": 1.5,
-            "hr_upscaler": webuiapi.HiResUpscaler.ESRGAN_4x,
+            "hr_upscaler": webuiapi.HiResUpscaler.Latent,
             "hr_second_pass_steps": 0,
-            "hr_resize_x": 256,
-            "hr_resize_y": 256,
-            "denoising_strength": 0.6
+            "hr_resize_x": 754,
+            "hr_resize_y": 1009,
+            "denoising_strength": 0.7
         }
 
 generation_params = generation_params_low

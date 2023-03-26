@@ -5,3 +5,4 @@ config/*
 *.pyc
 nsfw_mobilenet2/*
 black_list/*
+generations/*

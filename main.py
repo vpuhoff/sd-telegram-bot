@@ -13,10 +13,11 @@ from better_profanity import profanity
 from deep_translator import GoogleTranslator
 from nsfw_detector import predict
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
-                      ReplyKeyboardMarkup, Update)
+                      ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
 from telegram import __version__ as TG_VER
-from telegram.ext import (Application, CommandHandler, ContextTypes,
-                          MessageHandler, filters)
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+                          ContextTypes, MessageHandler, filters)
+from tqdm import tqdm
 
 import default
 
@@ -42,6 +43,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 configs = dc.Cache('config')
 black_list = dc.Cache('black_list')
+generations = dc.Cache('generations')
 
 sentry_dsn = getenv("DSN", None)
 sentry_sdk.init(sentry_dsn)
@@ -86,6 +88,8 @@ api = webuiapi.WebUIApi(host=getenv("API_HOST"), port=getenv("API_PORT"))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reply_markup = ReplyKeyboardRemove()
+    await update.message.reply_text("Клавиатура очищена", reply_markup=reply_markup)
     init_params(update, context)
 
 
@@ -117,12 +121,13 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.message.text:
             return
         current_strike_count = black_list.get(user.name, 0)
+        print(user.name, current_strike_count)
         if current_strike_count >= 10:
             print(user.name, "[blocked] user request rejected because user has banned")
             await update.message.reply_text(f"Strike {current_strike_count}/10 [Access to this bot is blocked for you for creating NSFW content.]",
                 reply_to_message_id=update.message.id)
             return
-        generation_params = copy(default.generation_params_hq)
+        generation_params = copy(default.generation_params_low)
         translated = GoogleTranslator(source='auto', target='en') \
             .translate(update.message.text)
         censored_text = profanity.censor(translated)
@@ -136,35 +141,41 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         img_io = None
         try:
             await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-            img_io, filename = generate_image(generation_params)
-            await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-            censor_result = predict.classify(nudenet_classifier, filename)[filename]
-            req_uid = str(uuid4())
-            censored_text, block_porn = check_filter(censored_text, 
-                                                     censor_result, 
-                                                     'porn', 0.3)
-            censored_text, block_hentai = check_filter(censored_text, 
-                                                       censor_result, 
-                                                       'hentai', 0.3)
-            await send_admin(update, user, censored_text, img_io)
-            if not block_porn and not block_hentai:
-                img_io.seek(0)
-                await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
-                await update.message.reply_photo(img_io,
-                    censored_text, 
-                    filename=f"{req_uid}.png",
-                    reply_to_message_id=update.message.id)
-            else:
-                current_strike_count = black_list.get(user.name, 0)
-                current_strike_count += 1
-                black_list.set(user.name, current_strike_count)
-                await update.message.reply_text(censored_text,
-                    reply_to_message_id=update.message.id)
-                warn_message = f"Strike {current_strike_count}/10 - NSFW content is not welcome in this bot, it was created for a small group of artists and their art experiments. It is not prohibited to use it to create creative content by any user, but when you reach 10 strikes, access to this bot will be blocked for you."
-                await update.message.reply_text(warn_message,
-                    reply_to_message_id=update.message.id)
-                print(user.name, warn_message)
-            remove(filename)
+            for _ in tqdm(range(1), desc="Generate image"):
+                img_io, filename = generate_image(generation_params)
+                await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+                censor_result = predict.classify(nudenet_classifier, filename)[filename]
+                req_uid = str(uuid4())
+                censored_text, block_porn = check_filter(censored_text, 
+                                                        censor_result, 
+                                                        'porn', 0.8)
+                censored_text, block_hentai = check_filter(censored_text, 
+                                                        censor_result, 
+                                                        'hentai', 0.8)
+                await send_admin(update, user, censored_text, img_io)
+                if not block_porn and not block_hentai:
+                    img_io.seek(0)
+                    await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
+                    buttons = []
+                    generations[req_uid] = generation_params
+                    buttons.append([InlineKeyboardButton(text = "Перегенерировать", callback_data=f"regenerate:{req_uid}")])
+                    buttons.append([InlineKeyboardButton(text = "Улучшить качество", callback_data=f"upscale:{req_uid}")])
+                    keyboard = InlineKeyboardMarkup(buttons)
+                    await update.message.reply_photo(img_io,
+                        censored_text, 
+                        filename=f"{req_uid}.png",
+                        reply_to_message_id=update.message.id, reply_markup=keyboard)
+                else:
+                    current_strike_count = black_list.get(user.name, 0)
+                    current_strike_count += 1
+                    black_list.set(user.name, current_strike_count)
+                    await update.message.reply_text(censored_text,
+                        reply_to_message_id=update.message.id)
+                    warn_message = f"Strike {current_strike_count}/10 - NSFW content is not welcome in this bot, it was created for a small group of artists and their art experiments. It is not prohibited to use it to create creative content by any user, but when you reach 10 strikes, access to this bot will be blocked for you."
+                    await update.message.reply_text(warn_message,
+                        reply_to_message_id=update.message.id)
+                    print(user.name, warn_message)
+                remove(filename)
         except Exception as e:
             await update.message.reply_text(f"Произошла ошибка: {e}")
             raise e
@@ -188,12 +199,40 @@ def generate_image(job_config):
     return img_io, filename
 
 async def handle_callback(update, context):
+    user = update.effective_user
     query = update.callback_query
-    data = query.data
-    context.user_data["state"] = data
-    bot = context.bot
-    await bot.send_message(chat_id=context._chat_id,
-    text="Введите новое значение параметра:")
+    action, generation_id = query.data.split(':')
+    generation_params = generations[generation_id]
+    for _ in tqdm(range(1), desc="Generate image"):
+        if action == 'upscale':
+            generation_params.update(copy(default.generation_params_hq))
+            img_io, filename = await create_new_image(update, user, generation_params)
+            await update.callback_query.message.reply_photo(img_io,
+                generation_params, 
+                filename=f"{filename}.png",
+                reply_to_message_id=update.callback_query.message.id)
+        if action == 'regenerate':
+            generation_params['seed'] = randint(1, 1000000)
+            img_io, filename = await create_new_image(update, user, generation_params)
+            buttons = []
+            generations[generation_id] = generation_params
+            buttons.append([InlineKeyboardButton(text = "Перегенерировать", callback_data=f"regenerate:{generation_id}")])
+            buttons.append([InlineKeyboardButton(text = "Улучшить качество", callback_data=f"upscale:{generation_id}")])
+            keyboard = InlineKeyboardMarkup(buttons)
+            await update.callback_query.message.reply_photo(img_io,
+                generation_params, 
+                filename=f"{filename}.png",
+                reply_to_message_id=update.callback_query.message.id, reply_markup=keyboard)
+
+async def create_new_image(update, user, generation_params):
+    await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+    img_io, filename = generate_image(generation_params)
+    await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+    await send_admin(update, user, generation_params, img_io)
+    img_io.seek(0)
+    await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
+    return img_io,filename
+
 
 
 def main() -> None:
@@ -208,7 +247,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     #application.add_handler(InlineQueryHandler(echo))
     # application.add_handler(MessageHandler(filters.COMMAND, echo))
-    # application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(CallbackQueryHandler(handle_callback))
     # Run the bot until the user presses Ctrl-C
     application.run_polling()
 
