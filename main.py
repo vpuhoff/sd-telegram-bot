@@ -1,8 +1,10 @@
 import logging
 from copy import copy
+from datetime import datetime, timedelta
 from io import BytesIO
 from os import getenv, remove
-from random import randint
+from os.path import join
+from random import randint, seed
 from uuid import uuid4
 
 import diskcache as dc
@@ -12,6 +14,7 @@ import webuiapi
 from better_profanity import profanity
 from deep_translator import GoogleTranslator
 from nsfw_detector import predict
+from pyairtable import Api, Base, Table
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
                       ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
 from telegram import __version__ as TG_VER
@@ -20,6 +23,12 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 from tqdm import tqdm
 
 import default
+
+images_folder = "D:\\bot_generations"
+airtable_token = getenv("AIRTABLE_TOKEN", "none")
+api = Api(airtable_token)
+airtable_base = api.get_base(getenv("AIRTABLE_BASE_ID", "none"))
+generations = airtable_base.get_table("generations")
 
 nudenet_classifier = predict.load_model('./nsfw_mobilenet2/saved_model.h5')
 
@@ -43,7 +52,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 configs = dc.Cache('config')
 black_list = dc.Cache('black_list')
-generations = dc.Cache('generations')
+generations_cache = dc.Cache('generations')
 
 sentry_dsn = getenv("DSN", None)
 sentry_sdk.init(sentry_dsn)
@@ -106,11 +115,11 @@ def init_params(update, context):
         return configs[user]
 
 
-async def send_admin(update, user, promt, img_io):
+async def send_admin(generation_id, update, user, promt, img_io):
     admin_chat_id = getenv("ADMIN_CHAT_ID", None)
     if admin_chat_id:
         bot = update.get_bot()
-        return await bot.send_photo(admin_chat_id, img_io, f"image from {user.name} [{promt}]")
+        return await bot.send_photo(admin_chat_id, img_io, f"image from {user.name} [{generation_id}]")
 
 STATE = None
 
@@ -133,31 +142,49 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         censored_text = profanity.censor(translated)
         generation_params['prompt'] = censored_text.replace("*", '')
         if ' not ' in censored_text.lower():
-            generation_params["negative_prompt"] = ','.join(censored_text.lower().split(' not ')[1:])
+            generation_params["negative_prompt"] = ','.join(translated.lower().split(' not ')[1:])
+            generation_params['prompt'] = censored_text.lower().split(' not ')[0]
         if len(translated) < 3:
             return
         generation_params['seed'] = randint(1, 1000000)
         print(user.name, generation_params)
         img_io = None
         try:
+            req_uid = str(uuid4())[:8]
             await user.send_chat_action(telegram.constants.ChatAction.TYPING)
             for _ in tqdm(range(1), desc="Generate image"):
+                t = datetime.now()
+                meta = generations.create({
+                    "username": user.name,
+                    "gid": req_uid,
+                    "prompt": generation_params['prompt'],
+                    "negative_prompt": generation_params["negative_prompt"],
+                    "seed": generation_params['seed'],
+                    "status": "processing",
+                    "hd": False
+                })
+                await user.send_message("Запрос на генерацию принят")
                 img_io, filename = generate_image(generation_params)
+                delta = (datetime.now() - t).total_seconds()
+                generations.update(meta['id'], {
+                    "status": "done",
+                    "duration": delta,
+                    "filename": filename
+                })
                 await user.send_chat_action(telegram.constants.ChatAction.TYPING)
                 censor_result = predict.classify(nudenet_classifier, filename)[filename]
-                req_uid = str(uuid4())
                 censored_text, block_porn = check_filter(censored_text, 
                                                         censor_result, 
                                                         'porn', 0.8)
                 censored_text, block_hentai = check_filter(censored_text, 
                                                         censor_result, 
                                                         'hentai', 0.8)
-                await send_admin(update, user, censored_text, img_io)
+                await send_admin(req_uid, update, user, censored_text, img_io)
                 if not block_porn and not block_hentai:
                     img_io.seek(0)
                     await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
                     buttons = []
-                    generations[req_uid] = generation_params
+                    generations_cache[req_uid] = generation_params
                     buttons.append([InlineKeyboardButton(text = "Перегенерировать", callback_data=f"regenerate:{req_uid}")])
                     buttons.append([InlineKeyboardButton(text = "Улучшить качество", callback_data=f"upscale:{req_uid}")])
                     keyboard = InlineKeyboardMarkup(buttons)
@@ -193,7 +220,7 @@ def generate_image(job_config):
     img_io = BytesIO()
     result1.image.save(img_io, 'PNG')
     img_io.seek(0)
-    filename = f"{job_config['seed']}.png"
+    filename = join(images_folder, f"{job_config['seed']}.png")
     with open(filename, 'wb') as f:
         result1.image.save(f, 'PNG')
     return img_io, filename
@@ -202,33 +229,66 @@ async def handle_callback(update, context):
     user = update.effective_user
     query = update.callback_query
     action, generation_id = query.data.split(':')
-    generation_params = generations[generation_id]
-    for _ in tqdm(range(1), desc="Generate image"):
+    generation_params = generations_cache[generation_id]
+    print(action.upper(), generation_params['prompt'])
+    for _ in tqdm(range(1), desc=f"Generate image for {user.name}"):
+        t = datetime.now()
+        meta = generations.create({
+            "username": user.name,
+            "gid": generation_id,
+            "prompt": generation_params['prompt'],
+            "negative_prompt": generation_params["negative_prompt"],
+            "seed": generation_params['seed'],
+            "status": "processing",
+            "hd": False
+        })
         if action == 'upscale':
             generation_params.update(copy(default.generation_params_hq))
-            img_io, filename = await create_new_image(update, user, generation_params)
-            await update.callback_query.message.reply_photo(img_io,
-                generation_params, 
-                filename=f"{filename}.png",
-                reply_to_message_id=update.callback_query.message.id)
-        if action == 'regenerate':
-            generation_params['seed'] = randint(1, 1000000)
-            img_io, filename = await create_new_image(update, user, generation_params)
+            await user.send_message("Запрос на генерацию принят")
+            img_io, filename = await create_new_image(generation_id, update, user, generation_params)
             buttons = []
-            generations[generation_id] = generation_params
+            generations_cache[generation_id] = generation_params
             buttons.append([InlineKeyboardButton(text = "Перегенерировать", callback_data=f"regenerate:{generation_id}")])
-            buttons.append([InlineKeyboardButton(text = "Улучшить качество", callback_data=f"upscale:{generation_id}")])
             keyboard = InlineKeyboardMarkup(buttons)
             await update.callback_query.message.reply_photo(img_io,
-                generation_params, 
+                f"Улучшение качества: {generation_id}, зерно {generation_params['seed']}", 
                 filename=f"{filename}.png",
                 reply_to_message_id=update.callback_query.message.id, reply_markup=keyboard)
+            delta = (datetime.now() - t).total_seconds()
+            generations.update(meta['id'], {
+                "status": "done",
+                "duration": delta,
+                "filename": filename,
+                "hd": True
+            })
+        if action == 'regenerate':
+            generation_params['seed'] = randint(1, 1000000)
+            await user.send_message("Запрос на генерацию принят")
+            img_io, filename = await create_new_image(generation_id, update, user, generation_params)
+            buttons = []
+            generations_cache[generation_id] = generation_params
+            buttons.append([InlineKeyboardButton(text = "Перегенерировать", callback_data=f"regenerate:{generation_id}")])
+            if not generation_params['enable_hr']:
+                buttons.append([InlineKeyboardButton(text = "Улучшить качество", callback_data=f"upscale:{generation_id}")])
+            keyboard = InlineKeyboardMarkup(buttons)
+            await update.callback_query.message.reply_photo(img_io,
+                f"Повторная генерация: {generation_id}, зерно {generation_params['seed']}",
+                filename=f"{filename}.png",
+                reply_to_message_id=update.callback_query.message.id, reply_markup=keyboard)
+            delta = (datetime.now() - t).total_seconds()
+            generations.update(meta['id'], {
+                "status": "done",
+                "duration": delta,
+                "filename": filename,
+                "seed": generation_params['seed'],
+                "hd": True
+            })
 
-async def create_new_image(update, user, generation_params):
+async def create_new_image(generation_id, update, user, generation_params):
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
     img_io, filename = generate_image(generation_params)
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-    await send_admin(update, user, generation_params, img_io)
+    await send_admin(generation_id, update, user, generation_params, img_io)
     img_io.seek(0)
     await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
     return img_io,filename

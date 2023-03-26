@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "e1e069d17315fe480796e1baedd733b1fcdda6c2ef3b7833ecb3bdee77a7d2df"
+            "sha256": "a98c1fbe7e7f6313e37fe1ad5979dd16103306c4238a9898063940c42ceffa68"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -599,6 +599,14 @@
             ],
             "index": "pypi",
             "version": "==3.19.6"
+        },
+        "pyairtable": {
+            "hashes": [
+                "sha256:e2e9cf7b14afcf5bac69f79f6a61e61bb8c8ff94656e9c7ebeef406c0fbfbb8c",
+                "sha256:f127af0796bfe40d349937b4c1a0ff81b7740fc3c8ebd0e6d0e559f42026be4b"
+            ],
+            "index": "pypi",
+            "version": "==1.4.0"
         },
         "pyasn1": {
             "hashes": [
