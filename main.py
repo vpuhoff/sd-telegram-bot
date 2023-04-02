@@ -257,10 +257,10 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 await user.send_chat_action(telegram.constants.ChatAction.TYPING)
                 censor_result = predict.classify(nudenet_classifier, filename)[filename]
-                censored_text, block_porn = check_filter(
+                censored_text, block_porn, block_porn_value = check_filter(
                     censored_text, censor_result, "porn", 0.8
                 )
-                censored_text, block_hentai = check_filter(
+                censored_text, block_hentai, block_hentai_value = check_filter(
                     censored_text, censor_result, "hentai", 0.8
                 )
                 await send_admin(req_uid, update, user, generation_params, img_io)
@@ -314,11 +314,11 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def check_filter(censored_text, censor_result, filter_name, filter_edge):
     if censor_result[filter_name] > filter_edge:
-        block_reason = f"{filter_name}={round(censor_result['porn']*100)}%"
+        block_reason = f"{filter_name}={round(censor_result[filter_name]*100)}%"
         censored_text = f"[BLOCKED {block_reason}] {censored_text}"
-        return censored_text, True
+        return censored_text, True, round(censor_result[filter_name]*100)
     else:
-        return censored_text, False
+        return censored_text, False, round(censor_result[filter_name]*100)
 
 
 def generate_image(job_config, gen_id, seed):
