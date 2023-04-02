@@ -6,3 +6,5 @@ config/*
 nsfw_mobilenet2/*
 black_list/*
 generations/*
+blacklist.txt
+whitelist.txt
