@@ -196,8 +196,8 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         current_strike_count = black_list.get(user.name, 0)
         print(user.name, current_strike_count)
         if (
-            user.name in black_list_users
-            or current_strike_count >= 5
+            (user.name in black_list_users
+            or current_strike_count >= 5)
             and user.name not in white_list_users
         ):
             print(user.name, "[blocked] user request rejected because user has banned")
@@ -248,7 +248,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     "Generation request accepted", reply_to_message_id=update.message.id
                 )
                 img_io, filename = generate_image(
-                    generation_params, req_uid, generation_params["seed"]
+                    user.name, generation_params, req_uid, generation_params["seed"]
                 )
                 delta = (datetime.now() - t).total_seconds()
                 generations.update(
@@ -321,12 +321,12 @@ def check_filter(censored_text, censor_result, filter_name, filter_edge):
         return censored_text, False, round(censor_result[filter_name]*100)
 
 
-def generate_image(job_config, gen_id, seed):
+def generate_image(username, job_config, gen_id, seed):
     result1 = api.txt2img(**job_config)
     img_io = BytesIO()
     result1.image.save(img_io, "PNG")
     img_io.seek(0)
-    filename = join(images_folder, f"{gen_id}-{job_config['seed']}.png")
+    filename = join(images_folder, f"{username}-{gen_id}-{job_config['seed']}.png")
     with open(filename, "wb") as f:
         result1.image.save(f, "PNG")
     return img_io, filename
@@ -430,7 +430,7 @@ async def handle_callback(update, context):
 async def create_new_image(generation_id, update, user, generation_params):
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
     img_io, filename = generate_image(
-        generation_params, generation_id, generation_params["seed"]
+        user.name, generation_params, generation_id, generation_params["seed"]
     )
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
     await send_admin(generation_id, update, user, generation_params, img_io)
