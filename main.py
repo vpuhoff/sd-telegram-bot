@@ -196,10 +196,8 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         current_strike_count = black_list.get(user.name, 0)
         print(user.name, current_strike_count)
         if (
-            (user.name in black_list_users
-            or current_strike_count >= 5)
-            and user.name not in white_list_users
-        ):
+            user.name in black_list_users or current_strike_count >= 5
+        ) and user.name not in white_list_users:
             print(user.name, "[blocked] user request rejected because user has banned")
             await update.message.reply_text(
                 f"Strike {current_strike_count}/5 [Access to this bot is blocked for you for creating NSFW content.]",
@@ -266,7 +264,9 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await send_admin(req_uid, update, user, generation_params, img_io)
                 img_io.seek(0)
 
-                if (not block_porn and not block_hentai) or user.name in white_list_users:
+                if (
+                    not block_porn and not block_hentai
+                ) or user.name in white_list_users:
                     await user.send_chat_action(
                         telegram.constants.ChatAction.UPLOAD_PHOTO
                     )
@@ -316,9 +316,9 @@ def check_filter(censored_text, censor_result, filter_name, filter_edge):
     if censor_result[filter_name] > filter_edge:
         block_reason = f"{filter_name}={round(censor_result[filter_name]*100)}%"
         censored_text = f"[BLOCKED {block_reason}] {censored_text}"
-        return censored_text, True, round(censor_result[filter_name]*100)
+        return censored_text, True, round(censor_result[filter_name] * 100)
     else:
-        return censored_text, False, round(censor_result[filter_name]*100)
+        return censored_text, False, round(censor_result[filter_name] * 100)
 
 
 def generate_image(username, job_config, gen_id, seed):
