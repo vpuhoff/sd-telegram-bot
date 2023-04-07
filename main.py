@@ -266,7 +266,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await send_admin(req_uid, update, user, generation_params, img_io)
                 img_io.seek(0)
 
-                if not block_porn and not block_hentai:
+                if (not block_porn and not block_hentai) or user.name in white_list_users:
                     await user.send_chat_action(
                         telegram.constants.ChatAction.UPLOAD_PHOTO
                     )
