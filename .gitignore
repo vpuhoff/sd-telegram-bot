@@ -9,3 +9,4 @@ generations/*
 blacklist.txt
 whitelist.txt
 generations_files/*
+generations_meta/*

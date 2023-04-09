@@ -67,6 +67,7 @@ configs = dc.Cache("config")
 black_list = dc.Cache("black_list")
 generations_cache = dc.Cache("generations")
 generations_files = dc.Cache("generations_files")
+generations_meta = dc.Cache("generations_meta")
 
 sentry_dsn = getenv("DSN", None)
 sentry_sdk.init(
@@ -154,11 +155,15 @@ def init_params(update, context):
         return configs[user]
 
 
-async def send_admin(generation_id, update, user, generation_params, img_io):
+async def send_admin(generation_id, update, user, generation_params, img_io, context):
     admin_chat_id = getenv("ADMIN_CHAT_ID", None)
     if generation_params:
         buttons = []
         generations_cache[generation_id] = generation_params
+        generations_meta[generation_id] = {
+            "username": user.username,
+            "chat_id": context._chat_id
+        }
         buttons.append(
             [
                 InlineKeyboardButton(
@@ -177,6 +182,13 @@ async def send_admin(generation_id, update, user, generation_params, img_io):
             [
                 InlineKeyboardButton(
                     text="Get prompt", callback_data=f"get_prompt:{generation_id}"
+                )
+            ]
+        )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="Strike", callback_data=f"strike:{generation_id}"
                 )
             ]
         )
@@ -281,7 +293,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 censored_text, block_hentai, block_hentai_value = check_filter(
                     censored_text, censor_result, "hentai", 0.9
                 )
-                await send_admin(req_uid, update, user, generation_params, img_io)
+                await send_admin(req_uid, update, user, generation_params, img_io, context)
                 img_io.seek(0)
 
                 if (
@@ -378,11 +390,24 @@ async def handle_callback(update, context):
     query = update.callback_query
     action, generation_id = query.data.split(":")
     generation_params = generations_cache[generation_id]
+    meta = generations_meta[generation_id] if generation_id in generations_meta else None
     print(action.upper(), generation_params["prompt"])
     for _ in tqdm(
         range(1), desc=f"{datetime.now().isoformat()} Generate image for {user.username}"
     ):
         t = datetime.now()
+        if action == "strike":
+            strikes = black_list.get(user.username, 0) + 1
+            black_list.set(user.username, strikes)
+            message = f"Strike {strikes}/5 [Strike for NSFW content generation]"
+            await update.callback_query.message.reply_text(message)
+            bot = update.get_bot()
+            await bot.send_message(
+                meta['chat_id'],
+                message,
+            )
+            return 
+
         meta = generations.create(
             {
                 "username": user.username,
@@ -401,7 +426,7 @@ async def handle_callback(update, context):
             try:
                 source_file = generations_files[f"{generation_id}-{generation_params['seed']}"]
                 img_io, filename = await upscale_image(
-                    generation_id, update, user, generation_params, source_file
+                    generation_id, update, user, generation_params, source_file, context
                 )
             except Exception as e:
                 sentry_sdk.capture_exception(e)
@@ -427,7 +452,7 @@ async def handle_callback(update, context):
                     reply_to_message_id=update.callback_query.message.id)
             try:
                 img_io, filename = await create_new_image(
-                    generation_id, update, user, generation_params
+                    generation_id, update, user, generation_params, context
                 )
             except Exception as e:
                 sentry_sdk.capture_exception(e)
@@ -481,7 +506,7 @@ async def handle_callback(update, context):
             )
             try:
                 img_io, filename = await create_new_image(
-                    generation_id, update, user, generation_params
+                    generation_id, update, user, generation_params, context
                 )
             except Exception as e:
                 sentry_sdk.capture_exception(e)
@@ -554,24 +579,24 @@ async def handle_callback(update, context):
             )
 
 
-async def create_new_image(generation_id, update, user, generation_params):
+async def create_new_image(generation_id, update, user, generation_params, context):
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
     img_io, filename = generate_image(
         user.username, generation_params, generation_id, generation_params["seed"]
     )
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-    await send_admin(generation_id, update, user, generation_params, img_io)
+    await send_admin(generation_id, update, user, generation_params, img_io, context)
     img_io.seek(0)
     await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
     return img_io, filename
 
-async def upscale_image(generation_id, update, user, generation_params, source_file):
+async def upscale_image(generation_id, update, user, generation_params, source_file, context):
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
     img_io, filename = upscale_image_start(
         user.username, generation_params, generation_id, source_file
     )
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-    await send_admin(generation_id, update, user, generation_params, img_io)
+    await send_admin(generation_id, update, user, generation_params, img_io, context)
     img_io.seek(0)
     await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
     return img_io, filename
