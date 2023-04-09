@@ -6,7 +6,7 @@ from os import getenv, remove
 from os.path import exists, join
 from random import randint, seed
 from uuid import uuid4
-
+from datetime import datetime as dt
 import diskcache as dc
 import sentry_sdk
 import telegram
@@ -15,6 +15,8 @@ from better_profanity import profanity
 from deep_translator import GoogleTranslator
 from nsfw_detector import predict
 from pyairtable import Api, Base, Table
+from sentry_sdk.consts import OP
+from sentry_sdk.hub import Hub
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -32,7 +34,6 @@ from telegram.ext import (
     filters,
 )
 from tqdm import tqdm
-
 import default
 
 images_folder = "X:\\bot_generations"
@@ -42,7 +43,6 @@ airtable_base = api.get_base(getenv("AIRTABLE_BASE_ID", "none"))
 generations = airtable_base.get_table("generations")
 
 nudenet_classifier = predict.load_model("./nsfw_mobilenet2/saved_model.h5")
-
 
 try:
     from telegram import __version_info__
@@ -66,7 +66,12 @@ black_list = dc.Cache("black_list")
 generations_cache = dc.Cache("generations")
 
 sentry_dsn = getenv("DSN", None)
-sentry_sdk.init(sentry_dsn)
+sentry_sdk.init(
+    sentry_dsn,
+    sample_rate=1,
+    traces_sample_rate=1.0,
+    profiles_sample_rate=1,
+)
 sentry_sdk.capture_message("Service started", "info")
 
 
@@ -117,7 +122,7 @@ reply_main_markup = ReplyKeyboardMarkup(main_commands, is_persistent=True)
 
 # create API client with custom host, port
 api = webuiapi.WebUIApi(host=getenv("API_HOST"), port=getenv("API_PORT"))
-all_options = api.get_options()
+# all_options = api.get_options()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -286,6 +291,13 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             )
                         ]
                     )
+                    buttons.append(
+                        [
+                            InlineKeyboardButton(
+                                text="Get prompt", callback_data=f"get_prompt:{req_uid}"
+                            )
+                        ]
+                    )
                     keyboard = InlineKeyboardMarkup(buttons)
                     await update.message.reply_photo(
                         img_io,
@@ -322,14 +334,27 @@ def check_filter(censored_text, censor_result, filter_name, filter_edge):
 
 
 def generate_image(username, job_config, gen_id, seed):
-    result1 = api.txt2img(**job_config)
-    img_io = BytesIO()
-    result1.image.save(img_io, "PNG")
-    img_io.seek(0)
-    filename = join(images_folder, f"{username}-{gen_id}-{job_config['seed']}.png")
-    with open(filename, "wb") as f:
-        result1.image.save(f, "PNG")
-    return img_io, filename
+    with sentry_sdk.start_transaction(
+        op="task",
+        name=f"[{username}]-{gen_id}-{job_config['seed']}",
+        source="generate_image",
+    ) as tran:
+        with sentry_sdk.start_span(description="generate"):
+            with tran.start_child(op="generate") as span:
+                with sentry_sdk.start_span(description="txt2img"):
+                    result1 = api.txt2img(**job_config)
+                with sentry_sdk.start_span(description="save"):
+                    img_io = BytesIO()
+                    result1.image.save(img_io, "PNG")
+                    img_io.seek(0)
+                    filename = join(
+                        images_folder, f"{username}-{gen_id}-{job_config['seed']}.png"
+                    )
+                    with open(filename, "wb") as f:
+                        result1.image.save(f, "PNG")
+                    span.finish(tran.hub, end_timestamp=dt.now())
+                    tran.set_status("success")
+                    return img_io, filename
 
 
 async def handle_callback(update, context):
@@ -355,10 +380,19 @@ async def handle_callback(update, context):
         )
         if action == "upscale":
             generation_params.update(copy(default.generation_params_hq))
-            await user.send_message("Generation request accepted")
-            img_io, filename = await create_new_image(
-                generation_id, update, user, generation_params
-            )
+            await user.send_message("Generation request accepted",
+                    reply_to_message_id=update.callback_query.message.id)
+            try:
+                img_io, filename = await create_new_image(
+                    generation_id, update, user, generation_params
+                )
+            except Exception as e:
+                sentry_sdk.capture_exception(e)
+                await user.send_message(
+                    "Generation failed: the server is under maintenance, try to send a request later.",
+                    reply_to_message_id=update.callback_query.message.id,
+                )
+                return
             buttons = []
             generations_cache[generation_id] = generation_params
             buttons.append(
@@ -366,6 +400,13 @@ async def handle_callback(update, context):
                     InlineKeyboardButton(
                         text="Re-generation",
                         callback_data=f"regenerate:{generation_id}",
+                    )
+                ]
+            )
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="Get prompt", callback_data=f"get_prompt:{generation_id}"
                     )
                 ]
             )
@@ -384,10 +425,21 @@ async def handle_callback(update, context):
             )
         if action == "regenerate":
             generation_params["seed"] = randint(1, 1000000)
-            await user.send_message("Generation request accepted")
-            img_io, filename = await create_new_image(
-                generation_id, update, user, generation_params
+            await user.send_message(
+                "Generation request accepted",
+                reply_to_message_id=update.callback_query.message.id,
             )
+            try:
+                img_io, filename = await create_new_image(
+                    generation_id, update, user, generation_params
+                )
+            except Exception as e:
+                sentry_sdk.capture_exception(e)
+                await user.send_message(
+                    "Generation failed: the server is under maintenance, try to send a request later.",
+                    reply_to_message_id=update.callback_query.message.id,
+                )
+                return
             buttons = []
             generations_cache[generation_id] = generation_params
             buttons.append(
@@ -395,6 +447,13 @@ async def handle_callback(update, context):
                     InlineKeyboardButton(
                         text="Re-generation",
                         callback_data=f"regenerate:{generation_id}",
+                    )
+                ]
+            )
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="Get prompt", callback_data=f"get_prompt:{generation_id}"
                     )
                 ]
             )
@@ -424,6 +483,16 @@ async def handle_callback(update, context):
                     "seed": generation_params["seed"],
                     "hd": True,
                 },
+            )
+        if action == "get_prompt":
+            negative_prompt = (
+                f" not {generation_params['negative_prompt']}"
+                if len(generation_params["negative_prompt"]) > 1
+                else ""
+            )
+            await user.send_message(
+                f"{generation_params['prompt']}{negative_prompt}",
+                reply_to_message_id=update.callback_query.message.id,
             )
 
 
