@@ -125,11 +125,16 @@ api = webuiapi.WebUIApi(host=getenv("API_HOST"), port=getenv("API_PORT"))
 # all_options = api.get_options()
 
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = ReplyKeyboardRemove()
     init_params(update, context)
     await update.message.reply_text(
-        "Now you can start working", reply_markup=reply_markup
+        """
+    This chatbot is designed for a small group of friends who enjoy creating digital art using the stable diffusion neural generative model. However, any user can use it to create creative content. The bot is created to give an opportunity to those who want to create.
+    But, please note that NSFW content is not welcome on this bot. There is a censorship filter here that monitors generation, and if it detects such content, it will issue a warning. After 5 warnings, the bot will block you. However, the filter may not always work correctly and if you received a warning on an image that is not related to NSFW, you can write to the bot [https://t.me/sd_bot_feedback_bot](https://t.me/sd_bot_feedback_bot) to get unblocked.
+    We hope that you will create many beautiful and interesting images!
+        """, reply_markup=reply_markup
     )
 
 
@@ -162,6 +167,13 @@ async def send_admin(generation_id, update, user, generation_params, img_io):
             [
                 InlineKeyboardButton(
                     text="Upscale", callback_data=f"upscale:{generation_id}"
+                )
+            ]
+        )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="Get prompt", callback_data=f"get_prompt:{generation_id}"
                 )
             ]
         )
