@@ -8,3 +8,4 @@ black_list/*
 generations/*
 blacklist.txt
 whitelist.txt
+generations_files/*

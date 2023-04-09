@@ -16,6 +16,7 @@ from deep_translator import GoogleTranslator
 from nsfw_detector import predict
 from pyairtable import Api, Base, Table
 from sentry_sdk.consts import OP
+from PIL import Image
 from sentry_sdk.hub import Hub
 from telegram import (
     InlineKeyboardButton,
@@ -36,14 +37,6 @@ from telegram.ext import (
 from tqdm import tqdm
 import default
 
-images_folder = "X:\\bot_generations"
-airtable_token = getenv("AIRTABLE_TOKEN", "none")
-api = Api(airtable_token)
-airtable_base = api.get_base(getenv("AIRTABLE_BASE_ID", "none"))
-generations = airtable_base.get_table("generations")
-
-nudenet_classifier = predict.load_model("./nsfw_mobilenet2/saved_model.h5")
-
 try:
     from telegram import __version_info__
 except ImportError:
@@ -56,6 +49,15 @@ if __version_info__ < (20, 0, 0, "alpha", 1):
         f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/examples.html"
     )
 
+
+
+images_folder = "X:\\bot_generations"
+airtable_token = getenv("AIRTABLE_TOKEN", "none")
+api = Api(airtable_token)
+airtable_base = api.get_base(getenv("AIRTABLE_BASE_ID", "none"))
+generations = airtable_base.get_table("generations")
+nudenet_classifier = predict.load_model("./nsfw_mobilenet2/saved_model.h5")
+
 # Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -64,6 +66,7 @@ logger = logging.getLogger(__name__)
 configs = dc.Cache("config")
 black_list = dc.Cache("black_list")
 generations_cache = dc.Cache("generations")
+generations_files = dc.Cache("generations_files")
 
 sentry_dsn = getenv("DSN", None)
 sentry_sdk.init(
@@ -139,7 +142,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def init_params(update, context):
-    user = update.effective_user.name
+    user = update.effective_user.username
     if user not in configs or configs.get(user, {}).get("version", None) != app_version:
         new_config = {}
         new_config["chat_id"] = context._chat_id
@@ -185,7 +188,7 @@ async def send_admin(generation_id, update, user, generation_params, img_io):
         return await bot.send_photo(
             admin_chat_id,
             img_io,
-            f"image from {user.name} [#{generation_id}]",
+            f"image from {user.username} [#{generation_id}]",
             reply_markup=keyboard,
         )
 
@@ -210,12 +213,12 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         init_params(update, context)  # Инициализация пользовательских настроек
         if not update.message or not update.message.text:
             return
-        current_strike_count = black_list.get(user.name, 0)
-        print(user.name, current_strike_count)
+        current_strike_count = black_list.get(user.username, 0)
+        print(user.username, current_strike_count)
         if (
-            user.name in black_list_users or current_strike_count >= 5
-        ) and user.name not in white_list_users:
-            print(user.name, "[blocked] user request rejected because user has banned")
+            user.username in black_list_users or current_strike_count >= 5
+        ) and user.username not in white_list_users:
+            print(user.username, "[blocked] user request rejected because user has banned")
             await update.message.reply_text(
                 f"Strike {current_strike_count}/5 [Access to this bot is blocked for you for creating NSFW content.] If you think you were blocked by mistake, you can write to boot @sd_bot_feedback_out to get unblocked",
                 reply_to_message_id=update.message.id,
@@ -225,7 +228,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         translated = GoogleTranslator(source="auto", target="en").translate(
             update.message.text
         )
-        if user.name not in white_list_users:
+        if user.username not in white_list_users:
             censored_text = profanity.censor(translated)
         else:
             censored_text = translated
@@ -238,19 +241,19 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if len(translated) < 3:
             return
         generation_params["seed"] = randint(1, 1000000)
-        print(user.name, generation_params)
+        print(user.username, generation_params)
         img_io = None
         try:
             req_uid = str(uuid4())[:8]
             await user.send_chat_action(telegram.constants.ChatAction.TYPING)
             for _ in tqdm(
                 range(1),
-                desc=f"{datetime.now().isoformat()} Generate image for {user.name}",
+                desc=f"{datetime.now().isoformat()} Generate image for {user.username}",
             ):
                 t = datetime.now()
                 meta = generations.create(
                     {
-                        "username": user.name,
+                        "username": user.username,
                         "gid": req_uid,
                         "prompt": generation_params["prompt"],
                         "negative_prompt": generation_params["negative_prompt"],
@@ -263,7 +266,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     "Generation request accepted", reply_to_message_id=update.message.id
                 )
                 img_io, filename = generate_image(
-                    user.name, generation_params, req_uid, generation_params["seed"]
+                    user.username, generation_params, req_uid, generation_params["seed"]
                 )
                 delta = (datetime.now() - t).total_seconds()
                 generations.update(
@@ -283,7 +286,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
                 if (
                     not block_porn and not block_hentai
-                ) or user.name in white_list_users:
+                ) or user.username in white_list_users:
                     await user.send_chat_action(
                         telegram.constants.ChatAction.UPLOAD_PHOTO
                     )
@@ -319,9 +322,9 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         reply_markup=keyboard,
                     )
                 else:
-                    current_strike_count = black_list.get(user.name, 0)
+                    current_strike_count = black_list.get(user.username, 0)
                     current_strike_count += 1
-                    black_list.set(user.name, current_strike_count)
+                    black_list.set(user.username, current_strike_count)
                     await update.message.reply_text(
                         censored_text, reply_to_message_id=update.message.id
                     )
@@ -329,7 +332,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     await update.message.reply_text(
                         warn_message, reply_to_message_id=update.message.id
                     )
-                    print(user.name, warn_message)
+                    print(user.username, warn_message)
                 remove(filename)
         except Exception as e:
             await update.message.reply_text(f"An error has occurred: {e}")
@@ -362,6 +365,7 @@ def generate_image(username, job_config, gen_id, seed):
                     filename = join(
                         images_folder, f"{username}-{gen_id}-{job_config['seed']}.png"
                     )
+                    generations_files[f"{gen_id}-{job_config['seed']}"] = filename
                     with open(filename, "wb") as f:
                         result1.image.save(f, "PNG")
                     span.finish(tran.hub, end_timestamp=dt.now())
@@ -376,12 +380,12 @@ async def handle_callback(update, context):
     generation_params = generations_cache[generation_id]
     print(action.upper(), generation_params["prompt"])
     for _ in tqdm(
-        range(1), desc=f"{datetime.now().isoformat()} Generate image for {user.name}"
+        range(1), desc=f"{datetime.now().isoformat()} Generate image for {user.username}"
     ):
         t = datetime.now()
         meta = generations.create(
             {
-                "username": user.name,
+                "username": user.username,
                 "gid": generation_id,
                 "prompt": generation_params["prompt"],
                 "negative_prompt": generation_params["negative_prompt"],
@@ -390,6 +394,33 @@ async def handle_callback(update, context):
                 "hd": False,
             }
         )
+        if action == "max_upscale":
+            generation_params.update(copy(default.generation_params_hq))
+            await user.send_message("Generation request accepted",
+                    reply_to_message_id=update.callback_query.message.id)
+            try:
+                source_file = generations_files[f"{generation_id}-{generation_params['seed']}"]
+                img_io, filename = await upscale_image(
+                    generation_id, update, user, generation_params, source_file
+                )
+            except Exception as e:
+                sentry_sdk.capture_exception(e)
+                await user.send_message(
+                    "Generation failed: the server is under maintenance, try to send a request later.",
+                    reply_to_message_id=update.callback_query.message.id,
+                )
+                return
+            await update.callback_query.message.reply_photo(
+                img_io,
+                f"MAX-Upscale: #{generation_id}, seed {generation_params['seed']}",
+                filename=f"{filename}.png",
+                reply_to_message_id=update.callback_query.message.id
+            )
+            delta = (datetime.now() - t).total_seconds()
+            generations.update(
+                meta["id"],
+                {"status": "done", "duration": delta, "filename": filename, "hd": True},
+            )
         if action == "upscale":
             generation_params.update(copy(default.generation_params_hq))
             await user.send_message("Generation request accepted",
@@ -412,6 +443,13 @@ async def handle_callback(update, context):
                     InlineKeyboardButton(
                         text="Re-generation",
                         callback_data=f"regenerate:{generation_id}",
+                    )
+                ]
+            )
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="Max upscale", callback_data=f"max_upscale:{generation_id}"
                     )
                 ]
             )
@@ -477,6 +515,14 @@ async def handle_callback(update, context):
                         )
                     ]
                 )
+            else:
+                buttons.append(
+                    [
+                        InlineKeyboardButton(
+                            text="Max upscale", callback_data=f"max_upscale:{generation_id}"
+                        )
+                    ]
+                )
             keyboard = InlineKeyboardMarkup(buttons)
             await update.callback_query.message.reply_photo(
                 img_io,
@@ -511,7 +557,7 @@ async def handle_callback(update, context):
 async def create_new_image(generation_id, update, user, generation_params):
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
     img_io, filename = generate_image(
-        user.name, generation_params, generation_id, generation_params["seed"]
+        user.username, generation_params, generation_id, generation_params["seed"]
     )
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
     await send_admin(generation_id, update, user, generation_params, img_io)
@@ -519,6 +565,41 @@ async def create_new_image(generation_id, update, user, generation_params):
     await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
     return img_io, filename
 
+async def upscale_image(generation_id, update, user, generation_params, source_file):
+    await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+    img_io, filename = upscale_image_start(
+        user.username, generation_params, generation_id, source_file
+    )
+    await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+    await send_admin(generation_id, update, user, generation_params, img_io)
+    img_io.seek(0)
+    await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
+    return img_io, filename
+
+def upscale_image_start(username, job_config, gen_id, source_file):
+    with sentry_sdk.start_transaction(
+        op="task",
+        name=f"[{username}]-{gen_id}-{job_config['seed']}",
+        source="generate_image",
+    ) as tran:
+        with sentry_sdk.start_span(description="generate"):
+            with tran.start_child(op="generate") as span:
+                with sentry_sdk.start_span(description="txt2img"):
+                    with Image.open(source_file) as img:
+                        result1 = api.extra_single_image(img, upscaler_1="R-ESRGAN 4x+")
+                with sentry_sdk.start_span(description="save"):
+                    img_io = BytesIO()
+                    result1.image.save(img_io, "PNG")
+                    img_io.seek(0)
+                    filename = join(
+                        images_folder, f"{username}-{gen_id}-{job_config['seed']}.png"
+                    )
+                    generations_files[f"{gen_id}-{job_config['seed']}"] = filename
+                    with open(filename, "wb") as f:
+                        result1.image.save(f, "PNG")
+                    span.finish(tran.hub, end_timestamp=dt.now())
+                    tran.set_status("success")
+                    return img_io, filename
 
 def main() -> None:
     """Start the bot."""
