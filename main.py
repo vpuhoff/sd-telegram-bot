@@ -132,7 +132,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         """
     This chatbot is designed for a small group of friends who enjoy creating digital art using the stable diffusion neural generative model. However, any user can use it to create creative content. The bot is created to give an opportunity to those who want to create.
-    But, please note that NSFW content is not welcome on this bot. There is a censorship filter here that monitors generation, and if it detects such content, it will issue a warning. After 5 warnings, the bot will block you. However, the filter may not always work correctly and if you received a warning on an image that is not related to NSFW, you can write to the bot [https://t.me/sd_bot_feedback_bot](https://t.me/sd_bot_feedback_bot) to get unblocked.
+    But, please note that NSFW content is not welcome on this bot. There is a censorship filter here that monitors generation, and if it detects such content, it will issue a warning. After 5 warnings, the bot will block you. However, the filter may not always work correctly and if you received a warning on an image that is not related to NSFW, you can write to the bot @sd_bot_feedback_bot to get unblocked.
     We hope that you will create many beautiful and interesting images!
         """, reply_markup=reply_markup
     )
@@ -217,7 +217,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ) and user.name not in white_list_users:
             print(user.name, "[blocked] user request rejected because user has banned")
             await update.message.reply_text(
-                f"Strike {current_strike_count}/5 [Access to this bot is blocked for you for creating NSFW content.]",
+                f"Strike {current_strike_count}/5 [Access to this bot is blocked for you for creating NSFW content.] If you think you were blocked by mistake, you can write to boot @sd_bot_feedback_out to get unblocked",
                 reply_to_message_id=update.message.id,
             )
             return
@@ -273,10 +273,10 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await user.send_chat_action(telegram.constants.ChatAction.TYPING)
                 censor_result = predict.classify(nudenet_classifier, filename)[filename]
                 censored_text, block_porn, block_porn_value = check_filter(
-                    censored_text, censor_result, "porn", 0.8
+                    censored_text, censor_result, "porn", 0.9
                 )
                 censored_text, block_hentai, block_hentai_value = check_filter(
-                    censored_text, censor_result, "hentai", 0.8
+                    censored_text, censor_result, "hentai", 0.9
                 )
                 await send_admin(req_uid, update, user, generation_params, img_io)
                 img_io.seek(0)
@@ -325,7 +325,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     await update.message.reply_text(
                         censored_text, reply_to_message_id=update.message.id
                     )
-                    warn_message = f"Strike {current_strike_count}/10 - NSFW content is not welcome in this bot, it was created for a small group of artists and their art experiments. It is not prohibited to use it to create creative content by any user, but when you reach 10 strikes, access to this bot will be blocked for you."
+                    warn_message = f"Strike {current_strike_count}/10 - NSFW content is not welcome in this bot, it was created for a small group of artists and their art experiments. It is not prohibited to use it to create creative content by any user, but when you reach 10 strikes, access to this bot will be blocked for you. If you think you were blocked by mistake, you can write to boot @sd_bot_feedback_out to get unblocked. Report this code {req_uid}"
                     await update.message.reply_text(
                         warn_message, reply_to_message_id=update.message.id
                     )
