@@ -13,7 +13,7 @@ generation_params_hq = {
 
 generation_params_low = {
             "prompt": "style of Ilya Kuvshinov",
-            "negative_prompt": "ugly",
+            "negative_prompt": "ugly,nude,",
             "seed": -1,
             "width": 520,
             "height": 696,
