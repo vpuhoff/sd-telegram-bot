@@ -1,6 +1,6 @@
 import logging
 from copy import copy
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import BytesIO
 from os import getenv, remove
 from os.path import exists, join
@@ -69,12 +69,12 @@ generations_files = dc.Cache("generations_files")
 generations_meta = dc.Cache("generations_meta")
 
 sentry_dsn = getenv("DSN", None)
-sentry_sdk.init(
-    sentry_dsn,
-    sample_rate=1,
-    traces_sample_rate=1.0,
-    profiles_sample_rate=1,
-)
+# sentry_sdk.init(
+#     sentry_dsn,
+#     sample_rate=1,
+#     traces_sample_rate=1.0,
+#     profiles_sample_rate=1,
+# )
 sentry_sdk.capture_message("Service started", "info")
 
 
@@ -162,6 +162,7 @@ async def send_admin(generation_id, update, user, generation_params, img_io, con
         generations_meta[generation_id] = {
             "username": user.name,
             "chat_id": context._chat_id,
+            "last_gid": generation_id
         }
         buttons.append(
             [
@@ -253,6 +254,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         generation_params["seed"] = randint(1, 1000000)
         print(user.name, generation_params)
+        configs[user.name] = generation_params
         img_io = None
         try:
             req_uid = str(uuid4())[:8]
@@ -575,10 +577,12 @@ async def create_new_image(generation_id, update, user, generation_params, conte
     img_io, filename = generate_image(
         user.name, generation_params, generation_id, generation_params["seed"]
     )
-    await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+    await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
+    img_io, filename = upscale_image_extra(
+        user.name, generation_params, generation_id, filename
+    )
     await send_admin(generation_id, update, user, generation_params, img_io, context)
     img_io.seek(0)
-    await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
     return img_io, filename
 
 
@@ -586,7 +590,7 @@ async def upscale_image(
     generation_id, update, user, generation_params, source_file, context
 ):
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-    img_io, filename = upscale_image_start(
+    img_io, filename = upscale_image_extra(
         user.name, generation_params, generation_id, source_file
     )
     await user.send_chat_action(telegram.constants.ChatAction.TYPING)
@@ -596,7 +600,7 @@ async def upscale_image(
     return img_io, filename
 
 
-def upscale_image_start(username, job_config, gen_id, source_file):
+def upscale_image_extra(username, job_config, gen_id, source_file):
     with sentry_sdk.start_transaction(
         op="task",
         name=f"[{username}]-{gen_id}-{job_config['seed']}",
@@ -622,6 +626,48 @@ def upscale_image_start(username, job_config, gen_id, source_file):
                     return img_io, filename
 
 
+async def photo_to_art(update, context):   
+    user = update.effective_user
+    generation_params = configs[user.name]
+    generation = copy(default.generation_params_img2img)
+    generation['prompt'] = generation_params['prompt']
+    generation['negative_prompt'] = generation_params['negative_prompt']
+    generation['seed'] = randint(0, 100000)
+    fileID = update.message.photo[-1].file_id 
+    bot = update.get_bot()  
+    file_info = await bot.get_file(fileID)
+    source_file = f"img2img_{fileID}.png"
+    await file_info.download_to_drive(source_file)
+    for x in tqdm(range(1), desc=f"img2img for {user.name}"):
+        with Image.open(source_file) as img:
+            api.img2img
+            result1 = api.img2img(images=[img], mask_image=None, **generation)
+            generation['width'] = img.width
+            generation['height'] = img.height
+            img_io = BytesIO()
+            result1.image.save(img_io, "PNG")
+            img_io.seek(0)
+            filename = join(
+                images_folder, f"{user.name}-{fileID}.png"
+            )
+            generations_files[f"{fileID}"] = filename
+            with open(filename, "wb") as f:
+                result1.image.save(f, "PNG")
+            with Image.open(filename) as img:
+                result1 = api.extra_single_image(img, upscaler_1="Lanczos", upscaling_resize=1.5)  # type: ignore
+                img_io = BytesIO()
+                result1.image.save(img_io, "PNG")
+                img_io.seek(0)
+            await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
+            await update.message.reply_photo(
+                    img_io,
+                    f"Re-generation: #{fileID}, seed {generation['seed']}",
+                    filename=f"{filename}.png",
+                    reply_to_message_id=update.message.id
+                )
+        
+
+
 def main() -> None:
     """Start the bot."""
     # Create the Application and pass it your bot's token.
@@ -632,6 +678,8 @@ def main() -> None:
 
     # on non command i.e message - echo the message on Telegram
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+
+    application.add_handler(MessageHandler(filters.PHOTO, photo_to_art))
     # application.add_handler(InlineQueryHandler(echo))
     # application.add_handler(MessageHandler(filters.COMMAND, echo))
     application.add_handler(CallbackQueryHandler(handle_callback))
