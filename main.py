@@ -46,7 +46,7 @@ if __version_info__ < (20, 0, 0, "alpha", 1):
     raise RuntimeError(
         f"This example is not compatible with your current PTB version {TG_VER}. To view the "
         f"{TG_VER} version of this example, "
-        f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/examples.html"
+        f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/html"
     )
 
 
@@ -463,13 +463,13 @@ async def handle_callback(update, context):
                     )
                 ]
             )
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        text="Max upscale", callback_data=f"max_upscale:{generation_id}"
-                    )
-                ]
-            )
+            # buttons.append(
+            #     [
+            #         InlineKeyboardButton(
+            #             text="Max upscale", callback_data=f"max_upscale:{generation_id}"
+            #         )
+            #     ]
+            # )
             buttons.append(
                 [
                     InlineKeyboardButton(
@@ -532,15 +532,15 @@ async def handle_callback(update, context):
                         )
                     ]
                 )
-            else:
-                buttons.append(
-                    [
-                        InlineKeyboardButton(
-                            text="Max upscale",
-                            callback_data=f"max_upscale:{generation_id}",
-                        )
-                    ]
-                )
+            # else:
+            #     buttons.append(
+            #         [
+            #             InlineKeyboardButton(
+            #                 text="Max upscale",
+            #                 callback_data=f"max_upscale:{generation_id}",
+            #             )
+            #         ]
+            #     )
             keyboard = InlineKeyboardMarkup(buttons)
             await update.callback_query.message.reply_photo(
                 img_io,
@@ -610,7 +610,7 @@ def upscale_image_extra(username, job_config, gen_id, source_file):
             with tran.start_child(op="generate") as span:
                 with sentry_sdk.start_span(description="txt2img"):
                     with Image.open(source_file) as img:
-                        result1 = api.extra_single_image(img, upscaler_1="Lanczos", upscaling_resize=2)  # type: ignore
+                        result1 = api.extra_single_image(img, upscaler_1="Lanczos", upscaling_resize=4)  # type: ignore
                 with sentry_sdk.start_span(description="save"):
                     img_io = BytesIO()
                     result1.image.save(img_io, "PNG")

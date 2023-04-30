@@ -10,3 +10,6 @@ blacklist.txt
 whitelist.txt
 generations_files/*
 generations_meta/*
+.vscode/dryrun.log
+.vscode/configurationCache.log
+.vscode/targets.log
