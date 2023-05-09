@@ -13,7 +13,7 @@ generation_params_hq = {
 
 generation_params_low = {
     "prompt": "style of Ilya Kuvshinov",
-    "negative_prompt": "ugly,nude,",
+    "negative_prompt": "ugly,nude, naked, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, (deformed, distorted, disfigured:1.3), floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, frames, borderline, text, character, duplicate, error, out of frame, watermark, low quality, ugly, deformed, blur  bad-artist",
     "seed": -1,
     "width": 520,
     "height": 696,

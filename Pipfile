@@ -18,6 +18,8 @@ nsfw-detector = "*"
 tqdm = "*"
 protobuf = "==3.19.6"
 pyairtable = "*"
+pika = "*"
+telethon = "*"
 
 [dev-packages]
 black = "*"

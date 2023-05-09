@@ -4,6 +4,7 @@ from datetime import datetime
 from io import BytesIO
 from os import getenv, remove
 from os.path import exists, join
+import pickle
 from random import randint, seed
 from uuid import uuid4
 from datetime import datetime as dt
@@ -34,8 +35,14 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+# from telethon.sync import TelegramClient
+# from telethon import connection
+
 from tqdm import tqdm
 import default
+import pika
+from threading import Thread
+
 
 try:
     from telegram import __version_info__
@@ -49,6 +56,30 @@ if __version_info__ < (20, 0, 0, "alpha", 1):
         f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/html"
     )
 
+#connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+# channel = connection.channel()
+# channel.queue_declare(queue='generations')
+# channel.queue_declare(queue='upscale')
+
+def enqueue(connection, queue, task):
+    return
+    with connection.channel() as channel:
+        channel.basic_publish(exchange='',
+                        routing_key=queue,
+                        body=pickle.dumps(task))
+
+def callback_example(ch, method, properties, body):
+    data = pickle.loads(body)
+    print(" [x] Received %r" % data)
+
+
+def consume(callback, queue):
+    with connection.channel() as channel:
+        channel.basic_consume(queue=queue,
+            auto_ack=True,
+            on_message_callback=callback)
+        channel.start_consuming()
+
 
 images_folder = "X:\\bot_generations"
 airtable_token = getenv("AIRTABLE_TOKEN", "none")
@@ -56,6 +87,12 @@ api = Api(airtable_token)
 airtable_base = api.get_base(getenv("AIRTABLE_BASE_ID", "none"))
 generations = airtable_base.get_table("generations")
 nudenet_classifier = predict.load_model("./nsfw_mobilenet2/saved_model.h5")
+session_id = str(uuid4())
+
+# proxy = connection.ConnectionTcpMTProxyRandomizedIntermediate(
+#     getenv("PROXY_HOST"), getenv("PROXY_PORT"), getenv("PROXY_SECRET"), session_id)
+
+
 
 # Enable logging
 logging.basicConfig(
@@ -278,6 +315,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await user.send_message(
                     "Generation request accepted", reply_to_message_id=update.message.id
                 )
+                
                 img_io, filename = generate_image(
                     user.name, generation_params, req_uid, generation_params["seed"]
                 )
@@ -438,6 +476,19 @@ async def handle_callback(update, context):
             )
         if action == "upscale":
             generation_params.update(copy(default.generation_params_hq))
+            task = {
+                "gid": generation_id,
+                "user": {
+                    "id": user.id,
+                    "name": user.name
+                },
+                "source":{
+                    "type": "callback_query",
+                    "id": update.callback_query.message.id
+                },
+                "query": generation_params
+            }
+            #enqueue(connection, "upscale", task)
             await user.send_message(
                 "Generation request accepted",
                 reply_to_message_id=update.callback_query.message.id,
@@ -667,24 +718,83 @@ async def photo_to_art(update, context):
                 )
         
 
+def upscale(ch, method, properties, body):
+    data = pickle.loads(body)
+    print(" [x] Received %r" % data)
+    # await user.send_message(
+    #     "Generation request accepted",
+    #     reply_to_message_id=update.callback_query.message.id,
+    # )
+    # try:
+    #     img_io, filename = await create_new_image(
+    #         generation_id, update, user, generation_params, context
+    #     )
+    # except Exception as e:
+    #     sentry_sdk.capture_exception(e)
+    #     await user.send_message(
+    #         "Generation failed: the server is under maintenance, try to send a request later.",
+    #         reply_to_message_id=update.callback_query.message.id,
+    #     )
+    #     return
+    # buttons = []
+    # generations_cache[generation_id] = generation_params
+    # buttons.append(
+    #     [
+    #         InlineKeyboardButton(
+    #             text="Re-generation",
+    #             callback_data=f"regenerate:{generation_id}",
+    #         )
+    #     ]
+    # )
+    # # buttons.append(
+    # #     [
+    # #         InlineKeyboardButton(
+    # #             text="Max upscale", callback_data=f"max_upscale:{generation_id}"
+    # #         )
+    # #     ]
+    # # )
+    # buttons.append(
+    #     [
+    #         InlineKeyboardButton(
+    #             text="Get prompt", callback_data=f"get_prompt:{generation_id}"
+    #         )
+    #     ]
+    # )
+    # keyboard = InlineKeyboardMarkup(buttons)
+    # await update.callback_query.message.reply_photo(
+    #     img_io,
+    #     f"Upscale: #{generation_id}, seed {generation_params['seed']}",
+    #     filename=f"{filename}.png",
+    #     reply_to_message_id=update.callback_query.message.id,
+    #     reply_markup=keyboard,
+    # )
+    # delta = (datetime.now() - t).total_seconds()
+    # generations.update(
+    #     meta["id"],
+    #     {"status": "done", "duration": delta, "filename": filename, "hd": True},
+    # )
+
+bot = Application.builder().token(getenv("TOKEN")).build()  # type: ignore
 
 def main() -> None:
     """Start the bot."""
     # Create the Application and pass it your bot's token.
-    application = Application.builder().token(getenv("TOKEN")).build()
+    # thread = Thread(target = consume, args = (upscale, "upscale"))
+    # thread.start()
+
 
     # on different commands - answer in Telegram
-    application.add_handler(CommandHandler("start", start))
+    bot.add_handler(CommandHandler("start", start))
 
     # on non command i.e message - echo the message on Telegram
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    application.add_handler(MessageHandler(filters.PHOTO, photo_to_art))
+    bot.add_handler(MessageHandler(filters.PHOTO, photo_to_art))
     # application.add_handler(InlineQueryHandler(echo))
     # application.add_handler(MessageHandler(filters.COMMAND, echo))
-    application.add_handler(CallbackQueryHandler(handle_callback))
+    bot.add_handler(CallbackQueryHandler(handle_callback))
     # Run the bot until the user presses Ctrl-C
-    application.run_polling()
+    bot.run_polling()
 
 
 if __name__ == "__main__":
