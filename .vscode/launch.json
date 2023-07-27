@@ -4,12 +4,28 @@
     // Для получения дополнительной информации посетите: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
+        {
+            "name": "Python: task main",
+            "type": "python",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/task_broker/",
+            "justMyCode": true
+        },
         {
             "name": "Telegram Bot",
             "type": "python",
             "request": "launch",
             "program": "main.py",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Telegram Bot v2",
+            "type": "python",
+            "request": "launch",
+            "program": "gui.py",
             "console": "integratedTerminal",
             "justMyCode": true
         }

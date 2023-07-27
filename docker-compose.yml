@@ -1,0 +1,24 @@
+version: "3"
+services:
+  rabbitmq:
+    image: rabbitmq:latest
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    expose:
+      - "5672"
+    ports:
+      - "35672:5672"
+  redis:
+    image: redis:latest
+    expose:
+      - "6379"
+    ports:
+      - "36379:6379"
+  flower:  
+    image: mher/flower
+    environment:
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    - FLOWER_PORT=8888
+    ports:  
+      - 8888:8888  

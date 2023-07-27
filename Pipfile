@@ -20,6 +20,12 @@ protobuf = "==3.19.6"
 pyairtable = "*"
 pika = "*"
 telethon = "*"
+pysocks = "*"
+pytelegrambotapi = "*"
+dearpygui = "*"
+psutil = "*"
+celery = "*"
+redis = "*"
 
 [dev-packages]
 black = "*"
