@@ -28,7 +28,7 @@ from telegram import __version__ as TG_VER
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 from tqdm import tqdm
-
+from urllib.parse import urlparse
 import default
 
 # from telethon.sync import TelegramClient
@@ -250,11 +250,28 @@ else:
 
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global api
     user = update.effective_user
     if user:
         init_params(update, context)  # Инициализация пользовательских настроек
         if not update.message or not update.message.text:
             return
+        if 'paperspacegradient' in update.message.text:
+            try:
+                parsed_uri = urlparse(update.message.text)
+                new_api_host = parsed_uri.hostname
+                api = webuiapi.WebUIApi(host=new_api_host, port=getenv("API_PORT"), use_https=True)
+                api.refresh_checkpoints()
+                await update.message.reply_text(
+                    "Настройки применены успешно",
+                    reply_to_message_id=update.message.id,
+                )
+                return
+            except Exception as e:
+                await update.message.reply_text(
+                    f"Не удалось применить настройки: {e}",
+                    reply_to_message_id=update.message.id,
+                )
         current_strike_count = black_list.get(user.name, 0)
         print(user.name, current_strike_count)
         if (
@@ -674,10 +691,10 @@ def upscale_image_extra(username, job_config, gen_id, source_file):
 
 async def photo_to_art(update, context):   
     user = update.effective_user
-    generation_params = configs[user.name]
+    #generation_params = configs[user.name]
     generation = copy(default.generation_params_img2img)
-    generation['prompt'] = generation_params['prompt']
-    generation['negative_prompt'] = generation_params['negative_prompt']
+    #generation['prompt'] = generation_params['prompt']
+    #generation['negative_prompt'] = generation_params['negative_prompt']
     generation['seed'] = randint(0, 100000)
     fileID = update.message.photo[-1].file_id 
     bot = update.get_bot()  
@@ -686,13 +703,16 @@ async def photo_to_art(update, context):
     await file_info.download_to_drive(source_file)
     for x in tqdm(range(1), desc=f"img2img for {user.name}"):
         with Image.open(source_file) as img:
-            crop = img.thumbnail((512, 512), Image.LANCZOS)
+            #crop = img.thumbnail((512, 512), Image.LANCZOS)
             interrogate_result = api.interrogate(img)
             image_info = interrogate_result.info
             generation['prompt'] = image_info
             result1 = api.img2img(images=[img], mask_image=None, **generation)
-            generation['width'] = img.width
-            generation['height'] = img.height
+            fixed_width = generation['width']
+            width_percent = (fixed_width / float(img.width))
+            height_size = int((float(img.size[0]) * float(width_percent)))
+            generation['width'] = fixed_width
+            generation['height'] = height_size
             img_io = BytesIO()
             result1.image.save(img_io, "jpeg", optimize=False, quality=100)
             img_io.seek(0)
