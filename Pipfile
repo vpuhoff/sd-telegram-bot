@@ -26,6 +26,7 @@ dearpygui = "*"
 psutil = "*"
 celery = "*"
 redis = "*"
+fastparquet = "*"
 
 [dev-packages]
 black = "*"
