@@ -19,7 +19,6 @@ def init_proxy():
 
 init_proxy()
 token = getenv("TOKEN")
-token = "1922962749:AAFkrEx0e0k0CjGyDzFgH6Nl9gWOGGrOVp0"
 maintenance_message = "The bot is temporarily under maintenance. I am actively engaged in its revision due to the increased workload. I recommend using the bot for now https://t.me/ai_nox_bot?start=33497099"
 if not token:
     print("Token required!")
