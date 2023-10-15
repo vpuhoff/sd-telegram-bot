@@ -1,41 +1,41 @@
 import logging
+import pickle
 from copy import copy
 from datetime import datetime
+from datetime import datetime as dt
 from io import BytesIO
 from os import getenv, remove
 from os.path import exists, join
 from random import randint, seed
+from threading import Thread
 from uuid import uuid4
-from datetime import datetime as dt
+
 import diskcache as dc
+import pika
 import sentry_sdk
 import telegram
 import webuiapi
 from better_profanity import profanity
 from deep_translator import GoogleTranslator
 from nsfw_detector import predict
+from PIL import Image
 from pyairtable import Api, Base, Table
 from sentry_sdk.consts import OP
-from PIL import Image
 from sentry_sdk.hub import Hub
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-    Update,
-)
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
+                      ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
 from telegram import __version__ as TG_VER
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+                          ContextTypes, MessageHandler, filters)
 from tqdm import tqdm
+from urllib.parse import urlparse
 import default
+from fastparquet import ParquetFile
+# from telethon.sync import TelegramClient
+# from telethon import connection
+
+from low import lowpriority
+lowpriority()
 
 try:
     from telegram import __version_info__
@@ -49,13 +49,43 @@ if __version_info__ < (20, 0, 0, "alpha", 1):
         f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/html"
     )
 
+#connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+# channel = connection.channel()
+# channel.queue_declare(queue='generations')
+# channel.queue_declare(queue='upscale')
+
+def enqueue(connection, queue, task):
+    return
+    with connection.channel() as channel:
+        channel.basic_publish(exchange='',
+                        routing_key=queue,
+                        body=pickle.dumps(task))
+
+def callback_example(ch, method, properties, body):
+    data = pickle.loads(body)
+    print(" [x] Received %r" % data)
+
+
+def consume(callback, queue):
+    with connection.channel() as channel:
+        channel.basic_consume(queue=queue,
+            auto_ack=True,
+            on_message_callback=callback)
+        channel.start_consuming()
+
 
 images_folder = "X:\\bot_generations"
 airtable_token = getenv("AIRTABLE_TOKEN", "none")
 api = Api(airtable_token)
-airtable_base = api.get_base(getenv("AIRTABLE_BASE_ID", "none"))
-generations = airtable_base.get_table("generations")
-nudenet_classifier = predict.load_model("./nsfw_mobilenet2/saved_model.h5")
+# airtable_base = api.get_base(getenv("AIRTABLE_BASE_ID", "none"))
+# generations = airtable_base.get_table("generations")
+##nudenet_classifier = predict.load_model("./nsfw_mobilenet2/saved_model.h5")
+session_id = str(uuid4())
+
+# proxy = connection.ConnectionTcpMTProxyRandomizedIntermediate(
+#     getenv("PROXY_HOST"), getenv("PROXY_PORT"), getenv("PROXY_SECRET"), session_id)
+
+
 
 # Enable logging
 logging.basicConfig(
@@ -124,9 +154,16 @@ main_commands = [["/start"]]
 reply_main_markup = ReplyKeyboardMarkup(main_commands, is_persistent=True)
 
 # create API client with custom host, port
-api = webuiapi.WebUIApi(host=getenv("API_HOST"), port=getenv("API_PORT"))
+api = webuiapi.WebUIApi(host=getenv("API_HOST"), port=getenv("API_PORT"), use_https=True)
 # all_options = api.get_options()
 
+
+pf = ParquetFile('prompts.parquet')
+df = pf.to_pandas()
+
+def get_random_prompt():
+    return df['prompt'].sample().tolist()[0]
+    
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = ReplyKeyboardRemove()
@@ -171,13 +208,13 @@ async def send_admin(generation_id, update, user, generation_params, img_io, con
                 )
             ]
         )
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text="Upscale", callback_data=f"upscale:{generation_id}"
-                )
-            ]
-        )
+        # buttons.append(
+        #     [
+        #         InlineKeyboardButton(
+        #             text="Upscale", callback_data=f"upscale:{generation_id}"
+        #         )
+        #     ]
+        # )
         buttons.append(
             [
                 InlineKeyboardButton(
@@ -220,11 +257,28 @@ else:
 
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global api
     user = update.effective_user
     if user:
         init_params(update, context)  # Инициализация пользовательских настроек
         if not update.message or not update.message.text:
             return
+        if 'paperspacegradient' in update.message.text:
+            try:
+                parsed_uri = urlparse(update.message.text)
+                new_api_host = parsed_uri.hostname
+                api = webuiapi.WebUIApi(host=new_api_host, port=getenv("API_PORT"), use_https=True)
+                api.refresh_checkpoints()
+                await update.message.reply_text(
+                    "Настройки применены успешно",
+                    reply_to_message_id=update.message.id,
+                )
+                return
+            except Exception as e:
+                await update.message.reply_text(
+                    f"Не удалось применить настройки: {e}",
+                    reply_to_message_id=update.message.id,
+                )
         current_strike_count = black_list.get(user.name, 0)
         print(user.name, current_strike_count)
         if (
@@ -255,84 +309,79 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         generation_params["seed"] = randint(1, 1000000)
         print(user.name, generation_params)
         configs[user.name] = generation_params
-        img_io = None
         try:
-            req_uid = str(uuid4())[:8]
-            await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-            for _ in tqdm(
-                range(1),
-                desc=f"{datetime.now().isoformat()} Generate image for {user.name}",
-            ):
-                t = datetime.now()
-                meta = generations.create(
-                    {
-                        "username": user.name,
-                        "gid": req_uid,
-                        "prompt": generation_params["prompt"],
-                        "negative_prompt": generation_params["negative_prompt"],
-                        "seed": generation_params["seed"],
-                        "status": "processing",
-                        "hd": False,
-                    }
-                )
-                await user.send_message(
-                    "Generation request accepted", reply_to_message_id=update.message.id
-                )
-                img_io, filename = generate_image(
-                    user.name, generation_params, req_uid, generation_params["seed"]
-                )
-                delta = (datetime.now() - t).total_seconds()
-                generations.update(
-                    meta["id"],
-                    {"status": "done", "duration": delta, "filename": filename},
-                )
-                await user.send_chat_action(telegram.constants.ChatAction.TYPING)
-                censor_result = predict.classify(nudenet_classifier, filename)[filename]
-                censored_text, block_porn, block_porn_value = check_filter(
-                    censored_text, censor_result, "porn", 0.9
-                )
-                await send_admin(
-                    req_uid, update, user, generation_params, img_io, context
-                )
-                img_io.seek(0)
-                await user.send_chat_action(
-                    telegram.constants.ChatAction.UPLOAD_PHOTO
-                )
-                buttons = []
-                generations_cache[req_uid] = generation_params
-                buttons.append(
-                    [
-                        InlineKeyboardButton(
-                            text="Regenerate", callback_data=f"regenerate:{req_uid}"
-                        )
-                    ]
-                )
-                buttons.append(
-                    [
-                        InlineKeyboardButton(
-                            text="Upscale", callback_data=f"upscale:{req_uid}"
-                        )
-                    ]
-                )
-                buttons.append(
-                    [
-                        InlineKeyboardButton(
-                            text="Get prompt", callback_data=f"get_prompt:{req_uid}"
-                        )
-                    ]
-                )
-                keyboard = InlineKeyboardMarkup(buttons)
-                await update.message.reply_photo(
-                    img_io,
-                    f"[#{req_uid}] {censored_text}",
-                    filename=f"{req_uid}.png",
-                    reply_to_message_id=update.message.id,
-                    reply_markup=keyboard,
-                )
-                remove(filename)
+            await new_image(update, context, user, generation_params, censored_text)
         except Exception as e:
             await update.message.reply_text(f"An error has occurred: {e}")
             raise e
+
+
+async def random(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global api
+    if ' ' in str(update.message.text):
+        count = int(update.message.text.split(' ')[-1])
+    else:
+        count = 3
+    user = update.effective_user
+    if user:
+        init_params(update, context)  # Инициализация пользовательских настроек
+        for x in tqdm(range(count), desc=f"{user} N{count}"):
+            generation_params = copy(default.generation_params_low)
+            generation_params["prompt"] = get_random_prompt()
+            generation_params["seed"] = randint(1, 1000000)
+            print(user.name, generation_params)
+            configs[user.name] = generation_params
+            try:
+                await new_image(update, context, user, generation_params, generation_params["prompt"])
+            except Exception as e:
+                await update.message.reply_text(f"An error has occurred: {e}")
+                raise e
+
+async def new_image(update, context, user, generation_params, censored_text, count=0):
+    req_uid = str(uuid4())[:8]
+    await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+
+    await user.send_message(
+                "Generation request accepted", reply_to_message_id=update.message.id
+            )
+            
+    img_io, filename = generate_image(
+                user.name, generation_params, req_uid, generation_params["seed"]
+            )
+
+    await user.send_chat_action(telegram.constants.ChatAction.TYPING)
+    await send_admin(
+                req_uid, update, user, generation_params, img_io, context
+            )
+    img_io.seek(0)
+    await user.send_chat_action(
+                telegram.constants.ChatAction.UPLOAD_PHOTO
+            )
+    buttons = []
+    generations_cache[req_uid] = generation_params
+    buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="Regenerate", callback_data=f"regenerate:{req_uid}"
+                    )
+                ]
+            )
+    buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="Get prompt", callback_data=f"get_prompt:{req_uid}"
+                    )
+                ]
+            )
+    keyboard = InlineKeyboardMarkup(buttons)
+    await update.message.reply_photo(
+                img_io,
+                f"[#{req_uid}] {censored_text}"[:min(len(censored_text), 300)],
+                filename=f"{req_uid}.png",
+                reply_to_message_id=update.message.id,
+                reply_markup=keyboard,
+            )
+    remove(filename)
 
 
 def check_filter(censored_text, censor_result, filter_name, filter_edge):
@@ -356,14 +405,14 @@ def generate_image(username, job_config, gen_id, seed):
                     result1 = api.txt2img(**job_config)
                 with sentry_sdk.start_span(description="save"):
                     img_io = BytesIO()
-                    result1.image.save(img_io, "PNG")
+                    result1.image.save(img_io, "jpeg", optimize=False, quality=100)
                     img_io.seek(0)
                     filename = join(
-                        images_folder, f"{username}-{gen_id}-{job_config['seed']}.png"
+                        images_folder, f"{username}-{gen_id}-{job_config['seed']}.jpg"
                     )
                     generations_files[f"{gen_id}-{job_config['seed']}"] = filename
                     with open(filename, "wb") as f:
-                        result1.image.save(f, "PNG")
+                        result1.image.save(f, "jpeg", optimize=False, quality=100)
                     span.finish(tran.hub, end_timestamp=dt.now())
                     tran.set_status("success")
                     return img_io, filename
@@ -379,7 +428,7 @@ async def handle_callback(update, context):
     )
     print(action.upper(), generation_params["prompt"])
     for _ in tqdm(
-        range(1), desc=f"{datetime.now().isoformat()} Generate image for {user.name}"
+        range(5), desc=f"{datetime.now().isoformat()} Generate image for {user.name}"
     ):
         t = datetime.now()
         if action == "strike":
@@ -394,17 +443,17 @@ async def handle_callback(update, context):
             )
             return
 
-        meta = generations.create(
-            {
-                "username": user.name,
-                "gid": generation_id,
-                "prompt": generation_params["prompt"],
-                "negative_prompt": generation_params["negative_prompt"],
-                "seed": generation_params["seed"],
-                "status": "processing",
-                "hd": False,
-            }
-        )
+        # meta = generations.create(
+        #     {
+        #         "username": user.name,
+        #         "gid": generation_id,
+        #         "prompt": generation_params["prompt"],
+        #         "negative_prompt": generation_params["negative_prompt"],
+        #         "seed": generation_params["seed"],
+        #         "status": "processing",
+        #         "hd": False,
+        #     }
+        # )
         if action == "max_upscale":
             generation_params.update(copy(default.generation_params_hq))
             await user.send_message(
@@ -432,64 +481,10 @@ async def handle_callback(update, context):
                 reply_to_message_id=update.callback_query.message.id,
             )
             delta = (datetime.now() - t).total_seconds()
-            generations.update(
-                meta["id"],
-                {"status": "done", "duration": delta, "filename": filename, "hd": True},
-            )
-        if action == "upscale":
-            generation_params.update(copy(default.generation_params_hq))
-            await user.send_message(
-                "Generation request accepted",
-                reply_to_message_id=update.callback_query.message.id,
-            )
-            try:
-                img_io, filename = await create_new_image(
-                    generation_id, update, user, generation_params, context
-                )
-            except Exception as e:
-                sentry_sdk.capture_exception(e)
-                await user.send_message(
-                    "Generation failed: the server is under maintenance, try to send a request later.",
-                    reply_to_message_id=update.callback_query.message.id,
-                )
-                return
-            buttons = []
-            generations_cache[generation_id] = generation_params
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        text="Re-generation",
-                        callback_data=f"regenerate:{generation_id}",
-                    )
-                ]
-            )
-            # buttons.append(
-            #     [
-            #         InlineKeyboardButton(
-            #             text="Max upscale", callback_data=f"max_upscale:{generation_id}"
-            #         )
-            #     ]
+            # generations.update(
+            #     meta["id"],
+            #     {"status": "done", "duration": delta, "filename": filename, "hd": True},
             # )
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        text="Get prompt", callback_data=f"get_prompt:{generation_id}"
-                    )
-                ]
-            )
-            keyboard = InlineKeyboardMarkup(buttons)
-            await update.callback_query.message.reply_photo(
-                img_io,
-                f"Upscale: #{generation_id}, seed {generation_params['seed']}",
-                filename=f"{filename}.png",
-                reply_to_message_id=update.callback_query.message.id,
-                reply_markup=keyboard,
-            )
-            delta = (datetime.now() - t).total_seconds()
-            generations.update(
-                meta["id"],
-                {"status": "done", "duration": delta, "filename": filename, "hd": True},
-            )
         if action == "regenerate":
             generation_params["seed"] = randint(1, 1000000)
             await user.send_message(
@@ -524,14 +519,14 @@ async def handle_callback(update, context):
                     )
                 ]
             )
-            if not generation_params["enable_hr"]:
-                buttons.append(
-                    [
-                        InlineKeyboardButton(
-                            text="Upscale", callback_data=f"upscale:{generation_id}"
-                        )
-                    ]
-                )
+            # if not generation_params["enable_hr"]:
+            #     buttons.append(
+            #         [
+            #             InlineKeyboardButton(
+            #                 text="Upscale", callback_data=f"upscale:{generation_id}"
+            #             )
+            #         ]
+            #     )
             # else:
             #     buttons.append(
             #         [
@@ -550,16 +545,16 @@ async def handle_callback(update, context):
                 reply_markup=keyboard,
             )
             delta = (datetime.now() - t).total_seconds()
-            generations.update(
-                meta["id"],
-                {
-                    "status": "done",
-                    "duration": delta,
-                    "filename": filename,
-                    "seed": generation_params["seed"],
-                    "hd": True,
-                },
-            )
+            # generations.update(
+            #     meta["id"],
+            #     {
+            #         "status": "done",
+            #         "duration": delta,
+            #         "filename": filename,
+            #         "seed": generation_params["seed"],
+            #         "hd": True,
+            #     },
+            # )
         if action == "get_prompt":
             negative_prompt = (
                 f" not {generation_params['negative_prompt']}"
@@ -570,6 +565,7 @@ async def handle_callback(update, context):
                 f"{generation_params['prompt']}{negative_prompt}",
                 reply_to_message_id=update.callback_query.message.id,
             )
+            return
 
 
 async def create_new_image(generation_id, update, user, generation_params, context):
@@ -613,14 +609,14 @@ def upscale_image_extra(username, job_config, gen_id, source_file):
                         result1 = api.extra_single_image(img, upscaler_1="Lanczos", upscaling_resize=4)  # type: ignore
                 with sentry_sdk.start_span(description="save"):
                     img_io = BytesIO()
-                    result1.image.save(img_io, "PNG")
+                    result1.image.save(img_io, "jpeg", optimize=False, quality=98)
                     img_io.seek(0)
                     filename = join(
                         images_folder, f"{username}-{gen_id}-{job_config['seed']}.png"
                     )
                     generations_files[f"{gen_id}-{job_config['seed']}"] = filename
                     with open(filename, "wb") as f:
-                        result1.image.save(f, "PNG")
+                        result1.image.save(f, "jpeg", optimize=False, quality=98)
                     span.finish(tran.hub, end_timestamp=dt.now())
                     tran.set_status("success")
                     return img_io, filename
@@ -628,10 +624,10 @@ def upscale_image_extra(username, job_config, gen_id, source_file):
 
 async def photo_to_art(update, context):   
     user = update.effective_user
-    generation_params = configs[user.name]
+    #generation_params = configs[user.name]
     generation = copy(default.generation_params_img2img)
-    generation['prompt'] = generation_params['prompt']
-    generation['negative_prompt'] = generation_params['negative_prompt']
+    #generation['prompt'] = generation_params['prompt']
+    #generation['negative_prompt'] = generation_params['negative_prompt']
     generation['seed'] = randint(0, 100000)
     fileID = update.message.photo[-1].file_id 
     bot = update.get_bot()  
@@ -640,51 +636,122 @@ async def photo_to_art(update, context):
     await file_info.download_to_drive(source_file)
     for x in tqdm(range(1), desc=f"img2img for {user.name}"):
         with Image.open(source_file) as img:
-            api.img2img
-            result1 = api.img2img(images=[img], mask_image=None, **generation)
-            generation['width'] = img.width
-            generation['height'] = img.height
+            #crop = img.thumbnail((512, 512), Image.LANCZOS)
+            interrogate_result = api.interrogate(img)
+            image_info = interrogate_result.info
+            generation['prompt'] = image_info
+            result1 = api.img2img(images=[img], mask_image=None, **generation, restore_faces=True)
+            fixed_width = generation['width']
+            width_percent = (fixed_width / float(img.width))
+            height_size = int((float(img.size[0]) * float(width_percent)))
+            generation['width'] = fixed_width
+            generation['height'] = height_size
             img_io = BytesIO()
-            result1.image.save(img_io, "PNG")
+            result1.image.save(img_io, "jpeg", optimize=False, quality=100)
             img_io.seek(0)
             filename = join(
                 images_folder, f"{user.name}-{fileID}.png"
             )
             generations_files[f"{fileID}"] = filename
             with open(filename, "wb") as f:
-                result1.image.save(f, "PNG")
+                result1.image.save(f, "jpeg", optimize=False, quality=100)
             with Image.open(filename) as img:
-                result1 = api.extra_single_image(img, upscaler_1="Lanczos", upscaling_resize=1.5)  # type: ignore
+                result1 = api.extra_single_image(img, upscaler_1="4x-UltraSharp", upscaling_resize=2, upscale_first=True)  # type: ignore
                 img_io = BytesIO()
-                result1.image.save(img_io, "PNG")
+                result1.image.save(img_io, "jpeg", optimize=False, quality=100)
                 img_io.seek(0)
             await user.send_chat_action(telegram.constants.ChatAction.UPLOAD_PHOTO)
             await update.message.reply_photo(
                     img_io,
-                    f"Re-generation: #{fileID}, seed {generation['seed']}",
-                    filename=f"{filename}.png",
+                    f"Img2img: #{fileID}, seed {generation['seed']}: {image_info}",
+                    filename=f"{filename}.jpg",
                     reply_to_message_id=update.message.id
                 )
+            
         
 
+def upscale(ch, method, properties, body):
+    data = pickle.loads(body)
+    print(" [x] Received %r" % data)
+    # await user.send_message(
+    #     "Generation request accepted",
+    #     reply_to_message_id=update.callback_query.message.id,
+    # )
+    # try:
+    #     img_io, filename = await create_new_image(
+    #         generation_id, update, user, generation_params, context
+    #     )
+    # except Exception as e:
+    #     sentry_sdk.capture_exception(e)
+    #     await user.send_message(
+    #         "Generation failed: the server is under maintenance, try to send a request later.",
+    #         reply_to_message_id=update.callback_query.message.id,
+    #     )
+    #     return
+    # buttons = []
+    # generations_cache[generation_id] = generation_params
+    # buttons.append(
+    #     [
+    #         InlineKeyboardButton(
+    #             text="Re-generation",
+    #             callback_data=f"regenerate:{generation_id}",
+    #         )
+    #     ]
+    # )
+    # # buttons.append(
+    # #     [
+    # #         InlineKeyboardButton(
+    # #             text="Max upscale", callback_data=f"max_upscale:{generation_id}"
+    # #         )
+    # #     ]
+    # # )
+    # buttons.append(
+    #     [
+    #         InlineKeyboardButton(
+    #             text="Get prompt", callback_data=f"get_prompt:{generation_id}"
+    #         )
+    #     ]
+    # )
+    # keyboard = InlineKeyboardMarkup(buttons)
+    # await update.callback_query.message.reply_photo(
+    #     img_io,
+    #     f"Upscale: #{generation_id}, seed {generation_params['seed']}",
+    #     filename=f"{filename}.png",
+    #     reply_to_message_id=update.callback_query.message.id,
+    #     reply_markup=keyboard,
+    # )
+    # delta = (datetime.now() - t).total_seconds()
+    # generations.update(
+    #     meta["id"],
+    #     {"status": "done", "duration": delta, "filename": filename, "hd": True},
+    # )
+
+bot = Application.builder().token(getenv("TOKEN")).build()  # type: ignore
 
 def main() -> None:
     """Start the bot."""
     # Create the Application and pass it your bot's token.
-    application = Application.builder().token(getenv("TOKEN")).build()
+    # thread = Thread(target = consume, args = (upscale, "upscale"))
+    # thread.start()
+
 
     # on different commands - answer in Telegram
-    application.add_handler(CommandHandler("start", start))
+    bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(CommandHandler("random", random))
 
     # on non command i.e message - echo the message on Telegram
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    application.add_handler(MessageHandler(filters.PHOTO, photo_to_art))
+    bot.add_handler(MessageHandler(filters.PHOTO, photo_to_art))
     # application.add_handler(InlineQueryHandler(echo))
     # application.add_handler(MessageHandler(filters.COMMAND, echo))
-    application.add_handler(CallbackQueryHandler(handle_callback))
+    bot.add_handler(CallbackQueryHandler(handle_callback))
     # Run the bot until the user presses Ctrl-C
-    application.run_polling()
+    while True:
+        try:
+            bot.run_polling(poll_interval=3)
+        except Exception as e:
+            print(e)
 
 
 if __name__ == "__main__":
